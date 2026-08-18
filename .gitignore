@@ -1,0 +1,21 @@
+# Binaries and build output
+/bin/
+/dist/
+score2cloudrun
+
+# Test and coverage output
+*.out
+coverage.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Local credentials — never commit a service account key
+*.key.json
+credentials.json
+.claude/settings.local.json

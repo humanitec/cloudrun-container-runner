@@ -1,0 +1,44 @@
+{
+  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner. Placeholders in the Resource Definition are already resolved by the Orchestrator at this point.",
+
+  "project": "my-gcp-project",
+  "region": "europe-west1",
+  "service": "hello-world-dev",
+
+  "score": {
+    "apiVersion": "score.dev/v1b1",
+    "metadata": {
+      "name": "hello-world"
+    },
+    "containers": {
+      "main": {
+        "image": "us-docker.pkg.dev/cloudrun/container/hello",
+        "variables": {
+          "GREETING": "hello from Score",
+          "DB_URL": "postgresql://user:pass@10.0.0.5:5432/app"
+        },
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "memory": "512Mi"
+          }
+        }
+      }
+    },
+    "service": {
+      "ports": {
+        "http": {
+          "port": 8080,
+          "targetPort": 8080
+        }
+      }
+    }
+  },
+
+  "scaling": {
+    "min_instances": 0,
+    "max_instances": 10
+  },
+  "allow_unauthenticated": true,
+  "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+}
