@@ -1,10 +1,18 @@
 # Resource Definition wiring the Cloud Run Runner into the Platform Orchestrator.
 #
-#   humctl create -f examples/resource-definition.yaml
+#   humctl apply -f examples/resource-definition.yaml
 #
-# The Orchestrator resolves every ${...} placeholder before the Container Driver
-# is called, so the Runner already receives concrete values in its
-# RESOURCE_INPUTS_FILE.
+# This uses the built-in Container Driver, which the Humanitec Operator runs
+# inside your own cluster and which resolves secrets from your own secret store.
+# There is therefore no Cloud Account and no `driver_account`, and the service
+# account key travels through `secret_refs` rather than `credentials_config`.
+#
+# The runner Job lands on the Operator's own cluster by default. To place it
+# elsewhere, add secret_refs.cluster.kubeconfig; there is no `cluster` input
+# under values for this Driver.
+#
+# The Orchestrator resolves every ${...} placeholder before the Driver runs, so
+# the Runner already receives concrete values in its RESOURCE_INPUTS_FILE.
 apiVersion: entity.humanitec.io/v1b1
 kind: Definition
 metadata:
@@ -12,51 +20,46 @@ metadata:
 entity:
   name: Cloud Run workload
   type: workload
-  driver_type: humanitec/container
-
-  # Cloud Account holding the credentials the Runner authenticates to GCP with.
-  driver_account: gcp-cloudrun-deployer
+  driver_type: humanitec/container-builtin
 
   driver_inputs:
     values:
       job:
+        # image and service_account are required together, unless you supply a
+        # pod_template instead.
         image: ghcr.io/humanitec/cloudrun-container-runner:latest
+        service_account: humanitec-runner
         # Must not collide with an existing directory in the Runner image.
         shared_directory: /humanitec
-        service_account: humanitec-runner
         namespace: humanitec-runner
 
-      # Where the Kubernetes Job that runs this image is scheduled. This is the
-      # Orchestrator's runner cluster — not where the workload ends up, which is
-      # Cloud Run.
-      cluster:
-        cluster:
-          cluster_type: gke
-          name: humanitec-runner
-          project_id: my-gcp-project
-          zone: europe-west1
-        account: my-org/gcp-cloudrun-deployer
-
-      # Materialise the Cloud Account credentials as a file and point the Cloud
-      # SDK at it. scripts/entrypoint.sh detects whether it holds a service
-      # account key or a Workload Identity Federation config.
-      credentials_config:
-        file: credentials.json
-        environment:
+        variables:
+          # gcloud reads these two natively, which is why the entrypoint passes
+          # no --project or --region flags of its own.
+          CLOUDSDK_CORE_PROJECT: my-gcp-project
+          CLOUDSDK_RUN_REGION: europe-west1
+          # Only the path to the key, never the key itself. Relative, so it
+          # resolves inside shared_directory once the entrypoint cd's there.
           GOOGLE_APPLICATION_CREDENTIALS: credentials.json
 
-      # Everything below is application payload rather than driver plumbing. The
-      # driver serialises the whole `values` object into RESOURCE_INPUTS_FILE,
-      # which is what score2cloudrun reads. Keys the Runner does not recognise
-      # (job, cluster, credentials_config) are ignored.
-      project: my-gcp-project
-      region: europe-west1
+      # Application payload. The Driver serialises the whole `values` object
+      # into RESOURCE_INPUTS_FILE, which is what score2cloudrun reads. Keys the
+      # Runner does not recognise are ignored.
       service: ${context.app.id}-${context.env.id}
 
       scaling:
         min_instances: 0
         max_instances: 10
       allow_unauthenticated: true
+
+    secret_refs:
+      # The service account key itself. The Operator reads it from your secret
+      # store and writes it into the shared directory under this file name, so
+      # the key appears neither in this Resource Definition nor in the image.
+      files:
+        credentials.json:
+          store: my-secret-store
+          ref: gcp/cloudrun-deployer-key
 
   criteria:
     - class: default
