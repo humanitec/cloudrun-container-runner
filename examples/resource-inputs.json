@@ -1,11 +1,9 @@
 {
-  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner. Placeholders in the Resource Definition are already resolved by the Orchestrator at this point.",
+  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and the entrypoint hands to score2cloudrun. Placeholders in the Resource Definition are already resolved by the Orchestrator at this point. The deployment target is deliberately absent: gcloud reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition. Keys the Runner does not recognise are ignored. An optional \"substitutions\" object may also appear alongside these, mapping Score placeholders to values or secret refs.",
 
-  "project": "my-gcp-project",
-  "region": "europe-west1",
-  "service": "hello-world-dev",
+  "id": "hello-world-dev",
 
-  "score": {
+  "spec": {
     "apiVersion": "score.dev/v1b1",
     "metadata": {
       "name": "hello-world"
@@ -35,10 +33,16 @@
     }
   },
 
-  "scaling": {
-    "min_instances": 0,
-    "max_instances": 10
-  },
-  "allow_unauthenticated": true,
-  "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+  "_comment_extensions": "Cloud Run specific overrides, keyed by the extension name the Runner looks for (CloudRunExtensionName). Accepted and parsed today, but not yet applied: see the applyExtensionToPod and 'apply extensions to Service' TODOs in cmd/score2cloudrun/main.go.",
+
+  "extensions": {
+    "cloudrun": {
+      "scaling": {
+        "min_instances": 0,
+        "max_instances": 10
+      },
+      "allow_unauthenticated": true,
+      "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+    }
+  }
 }
