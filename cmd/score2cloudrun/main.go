@@ -52,6 +52,30 @@ type WorkloadOutput struct {
 	ExternalSecrets []inputs.SecretInput
 }
 
+func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
+	out := make(map[string]inputs.Input, len(subs))
+	for key, s := range subs {
+		if s.Secret {
+			var secret *inputs.SecretInput
+			if s.Ref == nil {
+				secret = &inputs.SecretInput{
+					Value: s.Value,
+				}
+			} else {
+				secret = &inputs.SecretInput{
+					Store:   s.Ref.Store,
+					Key:     s.Ref.Ref,
+					Version: s.Ref.Version,
+				}
+			}
+			out[key] = inputs.Input{Secret: secret}
+			continue
+		}
+		out[key] = inputs.Input{Value: s.Value}
+	}
+	return out
+}
+
 func gsmSecretToNameVersion(secret *inputs.SecretInput) (string, string, error) {
 	if secret.Store != "gsm" {
 		return "", "", fmt.Errorf("unexpected secret store: expected \"gsm\", got \"%s\"", secret.Store)
@@ -89,16 +113,15 @@ func applyExtensionToPod(pod core.Pod, extension map[string]any) (core.Pod, erro
 }
 
 func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
-
 	workloadName := in.Id
 	workload := in.Spec
 	secrets := make([]inputs.SecretInput, 0)
 	var converter score.K8sScoreConverter
 	converter = score.K8sScoreConverter{
 		WorkloadResource: score.WorkloadResource{
-			Workload: &workload,
-			//Params: in.Substitutions,  // TODO: pass substitution
-			Name: workloadName,
+			Workload:      &workload,
+			Substitutions: substitutionsToInputs(in.Substitutions),
+			Name:          workloadName,
 		},
 		EnvVarOverride: func(containerName string) ([]core.EnvVar, error) {
 			envVars := []core.EnvVar{}
@@ -255,7 +278,7 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 		if len(workload.Service.Ports) > 1 {
 			return WorkloadOutput{}, fmt.Errorf("cloudrun only supports a single port, got %d ports", len(workload.Service.Ports))
 		}
-		containerPorts := []core.ContainerPort{}
+		containerPorts := make([]core.ContainerPort, 0)
 		for portName, port := range workload.Service.Ports {
 			portNum := int32(port.Port)
 			if port.TargetPort != nil {
@@ -343,7 +366,7 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -357,8 +380,8 @@ func run() error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
-		fmt.Fprintf(out, "Usage: %s [flags] RESOURCE_INPUTS_FILE\n\n", filepath.Base(os.Args[0]))
-		fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
+		_, _ = fmt.Fprintf(out, "Usage: %s [flags] RESOURCE_INPUTS_FILE\n\n", filepath.Base(os.Args[0]))
+		_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
 			"service manifest, written to stdout as YAML.\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
