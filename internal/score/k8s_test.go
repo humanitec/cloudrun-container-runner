@@ -48,7 +48,7 @@ func testContainerFileResolver_RecordVolumes(t *testing.T, dirCache map[string]s
 				Path: fn,
 			})
 		}
-		// Items in alphabetical key order to avoid arbritary changes in order.
+		// Items in alphabetical key order to avoid arbitrary changes in order.
 		slices.SortFunc(items, func(a, b core.KeyToPath) int {
 			return strings.Compare(a.Key, b.Key)
 		})

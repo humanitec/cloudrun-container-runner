@@ -12,8 +12,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/score-spec/score-go/types"
+
+	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 )
 
 var (
@@ -178,9 +179,13 @@ func ReplaceAllPlaceholders(obj any, placeholderStrs map[string]string) (any, er
 			}
 		}
 		return out, nil
-	case types.ContainerVariables, map[string]string:
+	case types.ContainerVariables:
+		// Asserting straight to map[string]string would fail: a named type is
+		// not identical to its underlying type, so convert instead.
+		return ReplaceAllPlaceholders(map[string]string(v), placeholderStrs)
+	case map[string]string:
 		out := map[string]any{}
-		for key, val := range v.(map[string]string) {
+		for key, val := range v {
 			out[key], err = ReplaceAllPlaceholdersInString(val, placeholderStrs)
 			if err != nil {
 				return nil, err

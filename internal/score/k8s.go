@@ -291,6 +291,7 @@ func (c *K8sScoreConverter) Volumes(platform string) (map[string][]core.VolumeMo
 			volumeMounts[containerName] = []core.VolumeMount{}
 		}
 		// TODO: this should be revisited after adding a volume placeholder substitution to the substitution map
+		//nolint:gocritic // commented-out code, restore it with the TODO above
 		//for mountPath, volume := range container.Volumes {
 		//	placeholders := GetAllPlaceholdersInString(volume.Source)
 		//	if len(placeholders) != 1 || !strings.HasPrefix(volume.Source, "${") || !strings.HasSuffix(volume.Source, "}") {
@@ -495,13 +496,13 @@ func resourceLimitsToResourceList(input *types.ResourcesLimits) (core.ResourceLi
 	if input.Cpu != nil {
 		output["cpu"], err = k8s.ParseQuantity(*input.Cpu)
 		if err != nil {
-			return nil, fmt.Errorf(".cpu: %s", err)
+			return nil, fmt.Errorf(".cpu: %w", err)
 		}
 	}
 	if input.Memory != nil {
 		output["memory"], err = k8s.ParseQuantity(*input.Memory)
 		if err != nil {
-			return nil, fmt.Errorf(".memory: %s", err)
+			return nil, fmt.Errorf(".memory: %w", err)
 		}
 	}
 	return output, nil
