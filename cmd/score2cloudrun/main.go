@@ -25,6 +25,9 @@ var version = "dev"
 
 const CloudRunExtensionName = "cloudrun"
 
+// gsmSecretStore is the only secret store Cloud Run can source secrets from.
+const gsmSecretStore = "gsm"
+
 type SecretRef struct {
 	Store   string `json:"store,omitempty"`
 	Ref     string `json:"ref,omitempty"`
@@ -77,7 +80,7 @@ func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input
 }
 
 func gsmSecretToNameVersion(secret *inputs.SecretInput) (string, string, error) {
-	if secret.Store != "gsm" {
+	if secret.Store != gsmSecretStore {
 		return "", "", fmt.Errorf("unexpected secret store: expected \"gsm\", got \"%s\"", secret.Store)
 	}
 	parts := strings.Split(secret.Key, "/")
@@ -139,7 +142,7 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 						if len(placeholders) != 1 || value != "${"+placeholder+"}" {
 							return nil, fmt.Errorf("secret with name %s: cloudrun only supports single google secret manager secrets per environment variable: got \"%s\"", name, value)
 						}
-						if output.Secret.Store != "gsm" {
+						if output.Secret.Store != gsmSecretStore {
 							if output.Secret.Store == "" {
 								return nil, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: direct secret supplied", name)
 							}
@@ -191,7 +194,7 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 			return envVars, nil
 		},
 		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (core.EnvVarSource, error) {
-			if secret.Store != "gsm" {
+			if secret.Store != gsmSecretStore {
 				if secret.Store == "" {
 					return core.EnvVarSource{}, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: direct secret supplied", name)
 				}
@@ -227,7 +230,7 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 			if content.Secret == nil {
 				return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
 			}
-			if content.Secret.Store != "gsm" {
+			if content.Secret.Store != gsmSecretStore {
 				if content.Secret.Store == "" {
 					return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports google secret manager secrets: direct secret supplied", dir, fileName)
 				}
