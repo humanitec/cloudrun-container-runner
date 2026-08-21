@@ -497,7 +497,7 @@ func TestOutputForPlaceholder(t *testing.T) {
 			expected:    inputs.Input{Value: "VALUE1"},
 		},
 		{
-			name:        "non existant metadata annotation",
+			name:        "non existent metadata annotation",
 			placeholder: "metadata.annotations.does-not-exist",
 			shouldFail:  true,
 		},

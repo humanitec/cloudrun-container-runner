@@ -1,0 +1,44 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - goconst
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - usestdlibvars
+  settings:
+    errcheck:
+      check-type-assertions: true
+    revive:
+      rules:
+        - name: exported
+        - name: error-strings
+        - name: context-as-argument
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests may assert loosely and repeat literals.
+      - path: _test\.go$
+        linters:
+          - errcheck
+          - goconst
+          - gocritic
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/humanitec/cloudrun-container-runner
