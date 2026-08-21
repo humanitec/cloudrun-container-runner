@@ -1,5 +1,5 @@
 {
-  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and the entrypoint hands to score2cloudrun. Placeholders in the Resource Definition are already resolved by the Orchestrator at this point. The deployment target is deliberately absent: gcloud reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition. Keys the Runner does not recognise are ignored. An optional \"substitutions\" object may also appear alongside these, mapping Score placeholders to values or secret refs.",
+  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and the entrypoint hands to score2cloudrun. Mirrors ResourceInputs in cmd/score2cloudrun/main.go: id, spec, substitutions, extensions. Keys the Runner does not recognise are ignored. The deployment target is deliberately absent: gcloud reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition.",
 
   "id": "hello-world-dev",
 
@@ -13,7 +13,12 @@
         "image": "us-docker.pkg.dev/cloudrun/container/hello",
         "variables": {
           "GREETING": "hello from Score",
-          "DB_URL": "postgresql://user:pass@10.0.0.5:5432/app"
+          "DB_URL": "${resources.db.uri}"
+        },
+        "volumes": {
+          "/app/backend/data": {
+            "source": "${resources.data}"
+          }
         },
         "resources": {
           "limits": {
@@ -30,10 +35,24 @@
           "targetPort": 8080
         }
       }
+    },
+    "resources": {
+      "db": {
+        "type": "postgres"
+      }
     }
   },
 
-  "_comment_extensions": "Cloud Run specific overrides, keyed by the extension name the Runner looks for (CloudRunExtensionName). Accepted and parsed today, but not yet applied: see the applyExtensionToPod and 'apply extensions to Service' TODOs in cmd/score2cloudrun/main.go.",
+  "substitutions": {
+    "resources.db.uri": {
+      "secret": true,
+      "ref": {
+        "store": "gsm",
+        "ref": "projects/1234567890/secrets/hello-world-db-uri",
+        "version": "3"
+      }
+    }
+  },
 
   "extensions": {
     "cloudrun": {

@@ -194,51 +194,10 @@ func ReplaceAllPlaceholders(obj any, placeholderStrs map[string]string) (any, er
 	}
 }
 
-// WorkloaResourceOutputsByName fetches the associated resource outputs
-// Dprecated. Use OutputForPlaceholder instead.
-func WorkloadResourceInputByName(workload types.Workload, params map[string]inputs.Input, scoreResName, workloadName string) (inputs.Input, error) {
-	res, exists := workload.Resources[scoreResName]
-	if !exists {
-		return inputs.Input{}, fmt.Errorf("workload does not have a resource with name \"%s\"", scoreResName)
-	}
-	class := "default"
-	if res.Class != nil && *res.Class != "" {
-		class = *res.Class
-	}
-	resName := workloadName + ".resources." + scoreResName
-	if res.Id != nil && *res.Id != "" {
-		resName = *res.Id
-	}
-	resID := res.Type + "." + class + "#" + resName
-
-	input, exists := params["resource::"+resID]
-	if !exists {
-		return inputs.Input{}, fmt.Errorf("internal error: cannot resolve resource inputs for %s in workload %s", resID, workloadName)
-	}
-	return input, nil
-}
-
-// ResolveResourceInputByPath returns the resource output based on path.
-// loc is only used for error messages - should be set to resources.<resName>
-// Dprecated. Use OutputForPlaceholder instead.
-func ResolveResourceOutputByPath(input inputs.Input, path []string, loc string) (inputs.Input, error) {
-	if len(path) == 0 {
-		return input, nil
-	}
-
-	if input.Map != nil {
-		if newInput, exists := input.Map[path[0]]; exists {
-			return ResolveResourceOutputByPath(newInput, path[1:], loc+"."+path[0])
-		}
-		return inputs.Input{}, fmt.Errorf("cannot resolve path %s.%s in resource input", loc, path[0])
-	}
-	return inputs.Input{}, fmt.Errorf("cannot resolve path, expected %s to be a map", path[0])
-}
-
 type WorkloadResource struct {
-	Workload *types.Workload
-	Params   map[string]inputs.Input
-	Name     string
+	Workload      *types.Workload
+	Substitutions map[string]inputs.Input
+	Name          string
 }
 
 func placeholderResolveInMap(placeholder []string, m map[string]any) (any, error) {
@@ -269,11 +228,10 @@ func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName strin
 	}
 	switch parts[0] {
 	case "resources":
-		input, err := WorkloadResourceInputByName(*w.Workload, w.Params, parts[1], w.Name)
-		if err != nil {
-			return inputs.Input{}, err
+		if sub, exist := w.Substitutions[placeholder]; exist {
+			return sub, nil
 		}
-		return ResolveResourceOutputByPath(input, parts[2:], strings.Join(parts[:2], "."))
+		return inputs.Input{}, fmt.Errorf("resolving placeholder \"%s\": no substitution found", placeholder)
 	case "metadata":
 		val, err := placeholderResolveInMap(parts[1:], w.Workload.Metadata)
 		if err != nil {

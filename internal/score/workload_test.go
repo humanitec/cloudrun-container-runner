@@ -438,29 +438,19 @@ func TestOutputForPlaceholder(t *testing.T) {
 				},
 			},
 		},
-		Params: map[string]inputs.Input{
-			"resource::postgres.default#workloads.test.resources.db": {
-				Map: map[string]inputs.Input{
-					"name":     {Value: "db_name"},
-					"port":     {Value: 5432},
-					"host":     {Value: "db.example.com"},
-					"username": {Value: "test-user"},
-					"password": {Secret: &inputs.SecretInput{
-						Store: "secrets",
-						Key:   "my/db/password",
-					}},
-				},
-			},
-			"resource::bucket.ro#workloads.test.resources.readonly-store": {
-				Map: map[string]inputs.Input{
-					"name": {Value: "read-only bucket"},
-				},
-			},
-			"resource::bucket.rw#common": {
-				Map: map[string]inputs.Input{
-					"name": {Value: "shared bucket"},
-				},
-			},
+		Substitutions: map[string]inputs.Input{
+			"resources.db.name":     {Value: "db_name"},
+			"resources.db.port":     {Value: 5432},
+			"resources.db.host":     {Value: "db.example.com"},
+			"resources.db.username": {Value: "test-user"},
+			"resources.db.password": {Secret: &inputs.SecretInput{
+				Store: "secrets",
+				Key:   "my/db/password",
+			}},
+
+			"resources.readonly-store.name": {Value: "read-only bucket"},
+
+			"resources.shared-store.name": {Value: "shared bucket"},
 		},
 		Name: "workloads.test",
 	}
@@ -579,35 +569,25 @@ func TestExpandFile(t *testing.T) {
 				},
 			},
 		},
-		Params: map[string]inputs.Input{
-			"resource::postgres.default#workloads.test.resources.db": {
-				Map: map[string]inputs.Input{
-					"name":     {Value: "db_name"},
-					"port":     {Value: 5432},
-					"host":     {Value: "db.example.com"},
-					"username": {Value: "test_user"},
-					"password": {Secret: &inputs.SecretInput{
-						Store: "secret",
-						Key:   "mysecret/mypassword",
-					}},
-				},
-			},
-			"resource::bucket.rw#common": {
-				Map: map[string]inputs.Input{
-					"name": {Value: "shared bucket"},
-				},
-			},
-			"resource::redis.default#workloads.test.resources.cache": {
-				Map: map[string]inputs.Input{
-					"name":     {Value: "redis"},
-					"port":     {Value: 6379},
-					"host":     {Value: "cache.example.com"},
-					"username": {Value: "redis_user"},
-					"password": {Secret: &inputs.SecretInput{
-						Value: "r3di5-p455w0rd",
-					}},
-				},
-			},
+		Substitutions: map[string]inputs.Input{
+			"resources.db.name":     {Value: "db_name"},
+			"resources.db.port":     {Value: 5432},
+			"resources.db.host":     {Value: "db.example.com"},
+			"resources.db.username": {Value: "test_user"},
+			"resources.db.password": {Secret: &inputs.SecretInput{
+				Store: "secret",
+				Key:   "mysecret/mypassword",
+			}},
+
+			"resources.shared-store.name": {Value: "shared bucket"},
+
+			"resources.cache.name":     {Value: "redis"},
+			"resources.cache.port":     {Value: 6379},
+			"resources.cache.host":     {Value: "cache.example.com"},
+			"resources.cache.username": {Value: "redis_user"},
+			"resources.cache.password": {Secret: &inputs.SecretInput{
+				Value: "r3di5-p455w0rd",
+			}},
 		},
 		Name: "workloads.test",
 	}

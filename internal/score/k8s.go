@@ -225,7 +225,7 @@ func (c *K8sScoreConverter) EnvVar(containerName string) ([]core.EnvVar, error) 
 // Raw secret - can be written to a K8s secret
 // K8s secret + key - use projected
 func (c *K8sScoreConverter) ContainerFiles() (map[string][]core.VolumeMount, []core.Volume, error) {
-	volumes := []core.Volume{}
+	volumes := make([]core.Volume, 0)
 	// container -> Volume mounts
 	volumeMounts := map[string][]core.VolumeMount{}
 
@@ -260,7 +260,7 @@ func (c *K8sScoreConverter) ContainerFiles() (map[string][]core.VolumeMount, []c
 				return nil, nil, err
 			}
 			if volume.Name != volumeName {
-				return nil, nil, fmt.Errorf("generted volume name is not supplied name, got %s want %s", volume.Name, volumeName)
+				return nil, nil, fmt.Errorf("generated volume name is not supplied name, got %s want %s", volume.Name, volumeName)
 			}
 			volumeMounts[containerName] = append(volumeMounts[containerName], core.VolumeMount{
 				Name:      volume.Name,
@@ -270,7 +270,7 @@ func (c *K8sScoreConverter) ContainerFiles() (map[string][]core.VolumeMount, []c
 			volumes = append(volumes, volume)
 		}
 
-		// Avoid arbritary changes in order due to map -> slice conversion
+		// Avoid arbitrary changes in order due to map -> slice conversion
 		slices.SortFunc(volumeMounts[containerName], func(a, b core.VolumeMount) int {
 			return strings.Compare(a.Name, b.Name)
 		})
@@ -281,23 +281,7 @@ func (c *K8sScoreConverter) ContainerFiles() (map[string][]core.VolumeMount, []c
 	return volumeMounts, volumes, nil
 }
 
-// K8sVolumesFromScore generates a slice compatible with Kubernetes
-// corev1.Volume
-//
-// Inputs:
-//
-// - workloadName is the resource name, e.g. workloads.products
-//
-// - workload is the Score Workload
-//
-// - params is the Params that the workload instance is provisioned with
-//
-//   - platform is the platform to select, default is "k8s" but could also be
-//     "google-cloud-run"
-//
-// Notes:
-//
-// Volume names are derived as resources-<score resource name>
+// Volumes generates a slice compatible with Kubernetes corev1.Volume
 func (c *K8sScoreConverter) Volumes(platform string) (map[string][]core.VolumeMount, []core.Volume, error) {
 	volumes := map[string]core.Volume{}
 	volumeMounts := map[string][]core.VolumeMount{}
@@ -306,63 +290,64 @@ func (c *K8sScoreConverter) Volumes(platform string) (map[string][]core.VolumeMo
 		if len(container.Volumes) > 0 {
 			volumeMounts[containerName] = []core.VolumeMount{}
 		}
-		for mountPath, volume := range container.Volumes {
-			placeholders := GetAllPlaceholdersInString(volume.Source)
-			if len(placeholders) != 1 || !strings.HasPrefix(volume.Source, "${") || !strings.HasSuffix(volume.Source, "}") {
-				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, got \"%s\"", containerName, mountPath, volume.Source)
-			}
-			parts := strings.Split(placeholders[0], ".")
-			if len(parts) != 2 || parts[0] != "resources" {
-				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, i.e. of the form ${resources.NAME} got ${%s}", containerName, mountPath, placeholders[0])
-			}
-			if volumeRes, exists := c.Workload.Resources[parts[1]]; exists {
-				if volumeRes.Type != "volume" {
-					return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} in source is not of type volume, got %s", containerName, mountPath, placeholders[0], volumeRes.Type)
-				}
-			} else {
-				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} cannot be resolved: no resource with name %s", containerName, mountPath, placeholders[0], parts[1])
-			}
-
-			volName := strings.ReplaceAll(placeholders[0], ".", "-")
-
-			if _, exists := volumes[volName]; !exists {
-				output, err := c.WorkloadResource.OutputForPlaceholder(placeholders[0]+"."+platform, containerName)
-				if err != nil {
-					return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
-				}
-				if outputAsMap, ok := output.Value.(map[string]any); !ok {
-					return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output)
-				} else {
-					var k8sVolume core.Volume
-					if err := utils.DecodeViaJSON(outputAsMap, &k8sVolume); err != nil {
-						return nil, nil, fmt.Errorf("resolving volume resource %s: unable to parse output for platform %s as k8s volume: %w", placeholders[0], platform, err)
-					}
-					k8sVolume.Name = volName
-					volumes[volName] = k8sVolume
-				}
-			}
-			subPath := ""
-			if volume.Path != nil {
-				subPath = *volume.Path
-			}
-
-			readOnly := false
-			var recursiveReadOnlyMode *core.RecursiveReadOnlyMode
-			if volume.ReadOnly != nil {
-				readOnly = *volume.ReadOnly
-				r := core.RecursiveReadOnlyIfPossible
-				recursiveReadOnlyMode = &r
-			}
-			volumeMounts[containerName] = append(volumeMounts[containerName], core.VolumeMount{
-				Name:              volName,
-				ReadOnly:          readOnly,
-				RecursiveReadOnly: recursiveReadOnlyMode,
-				MountPath:         mountPath,
-				SubPath:           subPath,
-				MountPropagation:  nil, // Default ti "None"
-				SubPathExpr:       "",  // Mutually exclusive to SubPath
-			})
-		}
+		// TODO: this should be revisited after adding a volume placeholder substitution to the substitution map
+		//for mountPath, volume := range container.Volumes {
+		//	placeholders := GetAllPlaceholdersInString(volume.Source)
+		//	if len(placeholders) != 1 || !strings.HasPrefix(volume.Source, "${") || !strings.HasSuffix(volume.Source, "}") {
+		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, got \"%s\"", containerName, mountPath, volume.Source)
+		//	}
+		//	parts := strings.Split(placeholders[0], ".")
+		//	if len(parts) != 2 || parts[0] != "resources" {
+		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, i.e. of the form ${resources.NAME} got ${%s}", containerName, mountPath, placeholders[0])
+		//	}
+		//	if volumeRes, exists := c.Workload.Resources[parts[1]]; exists {
+		//		if volumeRes.Type != "volume" {
+		//			return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} in source is not of type volume, got %s", containerName, mountPath, placeholders[0], volumeRes.Type)
+		//		}
+		//	} else {
+		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} cannot be resolved: no resource with name %s", containerName, mountPath, placeholders[0], parts[1])
+		//	}
+		//
+		//	volName := strings.ReplaceAll(placeholders[0], ".", "-")
+		//
+		//	if _, exists := volumes[volName]; !exists {
+		//		output, err := c.WorkloadResource.OutputForPlaceholder(placeholders[0]+"."+platform, containerName)
+		//		if err != nil {
+		//			return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
+		//		}
+		//		if outputAsMap, ok := output.Value.(map[string]any); !ok {
+		//			return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output)
+		//		} else {
+		//			var k8sVolume core.Volume
+		//			if err := utils.DecodeViaJSON(outputAsMap, &k8sVolume); err != nil {
+		//				return nil, nil, fmt.Errorf("resolving volume resource %s: unable to parse output for platform %s as k8s volume: %w", placeholders[0], platform, err)
+		//			}
+		//			k8sVolume.Name = volName
+		//			volumes[volName] = k8sVolume
+		//		}
+		//	}
+		//	subPath := ""
+		//	if volume.Path != nil {
+		//		subPath = *volume.Path
+		//	}
+		//
+		//	readOnly := false
+		//	var recursiveReadOnlyMode *core.RecursiveReadOnlyMode
+		//	if volume.ReadOnly != nil {
+		//		readOnly = *volume.ReadOnly
+		//		r := core.RecursiveReadOnlyIfPossible
+		//		recursiveReadOnlyMode = &r
+		//	}
+		//	volumeMounts[containerName] = append(volumeMounts[containerName], core.VolumeMount{
+		//		Name:              volName,
+		//		ReadOnly:          readOnly,
+		//		RecursiveReadOnly: recursiveReadOnlyMode,
+		//		MountPath:         mountPath,
+		//		SubPath:           subPath,
+		//		MountPropagation:  nil, // Default ti "None"
+		//		SubPathExpr:       "",  // Mutually exclusive to SubPath
+		//	})
+		//}
 	}
 	volumesAsSlice := make([]core.Volume, 0, len(volumes))
 	for _, volume := range volumes {
@@ -389,13 +374,13 @@ func (c *K8sScoreConverter) PodSpec(platform string) (core.PodSpec, error) {
 			return strings.Compare(a.Name, b.Name)
 		})
 	}
-	containers := []core.Container{}
+	containers := make([]core.Container, 0)
 	for containerName, scoreContainer := range c.Workload.Containers {
 		envVars, err := c.EnvVar(containerName)
 		if err != nil {
 			return core.PodSpec{}, err
 		}
-		containerVolumeMounts := []core.VolumeMount{}
+		containerVolumeMounts := make([]core.VolumeMount, 0)
 		if _, exists := volumeMounts[containerName]; exists {
 			containerVolumeMounts = append(containerVolumeMounts, volumeMounts[containerName]...)
 		}
