@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/yaml"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/google"
+	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
@@ -24,9 +27,6 @@ import (
 var version = "dev"
 
 const CloudRunExtensionName = "cloudrun"
-
-// gsmSecretStore is the only secret store Cloud Run can source secrets from.
-const gsmSecretStore = "gsm"
 
 type SecretRef struct {
 	Store   string `json:"store,omitempty"`
@@ -51,8 +51,7 @@ type ResourceInputs struct {
 }
 
 type WorkloadOutput struct {
-	Manifests       []map[string]any
-	ExternalSecrets []inputs.SecretInput
+	Manifests []map[string]any
 }
 
 func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
@@ -79,25 +78,6 @@ func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input
 	return out
 }
 
-func gsmSecretToNameVersion(secret *inputs.SecretInput) (string, string, error) {
-	if secret.Store != gsmSecretStore {
-		return "", "", fmt.Errorf("unexpected secret store: expected \"gsm\", got \"%s\"", secret.Store)
-	}
-	parts := strings.Split(secret.Key, "/")
-	if len(parts) < 4 || parts[0] != "projects" || parts[2] != "secrets" {
-		return "", "", fmt.Errorf("invalid google secret manager key: expected \"projects/{projectNumber}/secrets/{secretName}[/versions/{version}]\", got \"%s\"", secret.Key)
-	}
-	name := parts[3]
-	version := secret.Version
-	if len(parts) == 6 {
-		if parts[4] != "versions" {
-			return "", "", fmt.Errorf("invalid google secret manager key: expected \"projects/{projectNumber}/secrets/{secretName}[/versions/{version}]\", got \"%s\"", secret.Key)
-		}
-		version = parts[5]
-	}
-	return name, version, nil
-}
-
 func fileModeFromString(mode *string) (*int32, error) {
 	if mode == nil {
 		return nil, nil
@@ -115,10 +95,17 @@ func applyExtensionToPod(pod core.Pod, extension map[string]any) (core.Pod, erro
 	return pod, nil
 }
 
-func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
+// secretSaver stores a secret value under name and returns the version the
+// generated manifest should reference. *secretmanager.Client implements it.
+type secretSaver interface {
+	SaveSecret(ctx context.Context, name, value string) (string, error)
+}
+
+// scoreWorkloadToCloudRunService converts a Score workload into a Cloud Run service manifest.
+// Any secret the workload resolves is written to gsm secrets, and the manifest references its version.
+func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, secrets secretSaver) (WorkloadOutput, error) {
 	workloadName := in.Id
 	workload := in.Spec
-	secrets := make([]inputs.SecretInput, 0)
 	var converter score.K8sScoreConverter
 	converter = score.K8sScoreConverter{
 		WorkloadResource: score.WorkloadResource{
@@ -127,61 +114,60 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 			Name:          workloadName,
 		},
 		EnvVarOverride: func(containerName string) ([]core.EnvVar, error) {
-			envVars := []core.EnvVar{}
+			envVars := make([]core.EnvVar, 0)
 			for name, value := range workload.Containers[containerName].Variables {
 				placeholders := score.GetAllPlaceholdersInString(value)
 
 				placeholderStrs := map[string]string{}
-				processed := false
+				isSecret := false
 				for _, placeholder := range placeholders {
 					output, err := converter.OutputForPlaceholder(placeholder, containerName)
 					if err != nil {
 						return nil, err
 					}
 					if output.Secret != nil {
-						if len(placeholders) != 1 || value != "${"+placeholder+"}" {
-							return nil, fmt.Errorf("secret with name %s: cloudrun only supports single google secret manager secrets per environment variable: got \"%s\"", name, value)
+						if output.Secret.Value == nil {
+							// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
+							// In the future we may need to support secret references, that reference Google Secret Manager secrets.
+							return nil, fmt.Errorf("secret with name %s: secret references are not supported: require secret value to be provided", name)
 						}
-						if output.Secret.Store != gsmSecretStore {
-							if output.Secret.Store == "" {
-								return nil, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: direct secret supplied", name)
-							}
-							return nil, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: require store to be \"gsm\" got \"%s\"", name, output.Secret.Store)
-						}
-						secrets = append(secrets, *output.Secret)
-						secretName, secretVersion, err := gsmSecretToNameVersion(output.Secret)
+						isSecret = true
+						str, err := anyToString(output.Secret.Value)
 						if err != nil {
-							return nil, fmt.Errorf("secret with name %s: %w", name, err)
+							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 						}
-						envVars = append(envVars, core.EnvVar{
-							Name: name,
-							ValueFrom: &core.EnvVarSource{
-								SecretKeyRef: &core.SecretKeySelector{
-									Key: secretVersion,
-									LocalObjectReference: core.LocalObjectReference{
-										Name: secretName,
-									},
-								},
-							},
-						})
-						processed = true
+						placeholderStrs[placeholder] = str
 					} else if output.Value != nil {
-						if str, ok := output.Value.(string); ok {
-							placeholderStrs[placeholder] = str
-						} else {
-							b, err := json.Marshal(output.Value)
-							if err != nil {
-								return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-							}
-							placeholderStrs[placeholder] = string(b)
+						str, err := anyToString(output.Value)
+						if err != nil {
+							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 						}
+						placeholderStrs[placeholder] = str
 					}
 				}
-				if !processed {
-					replacedVal, err := score.ReplaceAllPlaceholdersInString(value, placeholderStrs)
+				replacedVal, err := score.ReplaceAllPlaceholdersInString(value, placeholderStrs)
+				if err != nil {
+					return nil, fmt.Errorf("resolving variable %s in container %s: %w", name, containerName, err)
+				}
+				if isSecret {
+					// Save the secret to GSM and add the env var reference
+					secretName := secretmanager.SecretName(workloadName, containerName, "env", name)
+					secretVersion, err := secrets.SaveSecret(ctx, secretName, replacedVal)
 					if err != nil {
-						return nil, fmt.Errorf("resolving variable %s in container %s: %w", name, containerName, err)
+						return nil, fmt.Errorf("resolving variable %s in container %s: saving secret to google secret manager: %w", name, containerName, err)
 					}
+					envVars = append(envVars, core.EnvVar{
+						Name: name,
+						ValueFrom: &core.EnvVarSource{
+							SecretKeyRef: &core.SecretKeySelector{
+								Key: secretVersion,
+								LocalObjectReference: core.LocalObjectReference{
+									Name: secretName,
+								},
+							},
+						},
+					})
+				} else {
 					envVars = append(envVars, core.EnvVar{
 						Name:  name,
 						Value: replacedVal,
@@ -194,25 +180,7 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 			return envVars, nil
 		},
 		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (core.EnvVarSource, error) {
-			if secret.Store != gsmSecretStore {
-				if secret.Store == "" {
-					return core.EnvVarSource{}, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: direct secret supplied", name)
-				}
-				return core.EnvVarSource{}, fmt.Errorf("secret with name %s: cloudrun only supports google secret manager secrets: require store to be \"gsm\" got \"%s\"", name, secret.Store)
-			}
-			secrets = append(secrets, *secret)
-			secretName, secretVersion, err := gsmSecretToNameVersion(secret)
-			if err != nil {
-				return core.EnvVarSource{}, fmt.Errorf("secret with name %s: %w", name, err)
-			}
-			return core.EnvVarSource{
-				SecretKeyRef: &core.SecretKeySelector{
-					Key: secretVersion,
-					LocalObjectReference: core.LocalObjectReference{
-						Name: secretName,
-					},
-				},
-			}, nil
+			return core.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
 		},
 		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (core.Volume, error) {
 			if len(files) > 1 {
@@ -230,20 +198,24 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 			if content.Secret == nil {
 				return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
 			}
-			if content.Secret.Store != gsmSecretStore {
-				if content.Secret.Store == "" {
-					return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports google secret manager secrets: direct secret supplied", dir, fileName)
-				}
-				return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports google secret manager secrets: require store to be \"gsm\" got \"%s\"", dir, fileName, content.Secret.Store)
+			if content.Secret.Value == nil {
+				// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
+				// In the future we may need to support secret references, that reference Google Secret Manager secrets.
+				return core.Volume{}, fmt.Errorf("file %s/%s: secret references are not supported: require secret value to be provided", dir, fileName)
 			}
 			fileMode, err := fileModeFromString(files[fileName].Mode)
 			if err != nil {
 				return core.Volume{}, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
 			}
-			secrets = append(secrets, *content.Secret)
-			secretName, secretVersion, err := gsmSecretToNameVersion(content.Secret)
+			// Save the secret to GSM and createVolume spec
+			str, err := anyToString(content.Secret.Value)
 			if err != nil {
 				return core.Volume{}, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
+			}
+			secretName := secretmanager.SecretName(workloadName, containerName, "vol", fileName)
+			secretVersion, err := secrets.SaveSecret(ctx, secretName, str)
+			if err != nil {
+				return core.Volume{}, fmt.Errorf("file %s/%s: saving secret to google secret manager: %w", dir, fileName, err)
 			}
 			return core.Volume{
 				VolumeSource: core.VolumeSource{
@@ -333,13 +305,12 @@ func scoreWorkloadToCloudRunService(in ResourceInputs) (WorkloadOutput, error) {
 		Manifests: []map[string]any{
 			serviceAsMap,
 		},
-		ExternalSecrets: uniqueOrderedSecrets(secrets),
 	}, nil
 
 }
 
 // readResourceInputs loads RESOURCE_INPUTS_FILE, the JSON the Container Driver
-// writes for the runner and the entrypoint passes to us as an argument. See
+// writes for the runner, and the entrypoint passes to us as an argument. See
 // examples/resource-inputs.json. Keys the runner does not recognise are
 // ignored; the deployment target is not in here at all, it reaches gcloud
 // through CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION.
@@ -368,7 +339,7 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 }
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(context.Background()); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
 		os.Exit(1)
 	}
@@ -379,7 +350,7 @@ func main() {
 //
 // Nothing else may go to stdout: the entrypoint redirects it straight into
 // service.yaml. Diagnostics belong on stderr, which lands in the Job log.
-func run() error {
+func run(ctx context.Context) error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
@@ -405,7 +376,14 @@ func run() error {
 		return err
 	}
 
-	out, err := scoreWorkloadToCloudRunService(in)
+	secrets := secretmanager.New(google.TargetFromEnv())
+	defer func() {
+		if err := secrets.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
+		}
+	}()
+
+	out, err := scoreWorkloadToCloudRunService(ctx, in, secrets)
 	if err != nil {
 		return fmt.Errorf("converting the Score workload into a Cloud Run service: %w", err)
 	}
