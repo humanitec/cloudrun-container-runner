@@ -37,7 +37,7 @@ type SecretRef struct {
 // Substitution defines with what a Score placeholder should be substituted.
 type Substitution struct {
 	Secret bool       `json:"secret"`
-	Value  string     `json:"value,omitempty"`
+	Value  any        `json:"value,omitempty"`
 	Ref    *SecretRef `json:"ref,omitempty"`
 }
 
