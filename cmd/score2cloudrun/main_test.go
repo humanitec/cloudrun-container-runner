@@ -1,15 +1,10 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
-
-	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
 func envForSubstitution(t *testing.T, substitutionJSON, variable string) string {
@@ -31,18 +26,7 @@ func envForSubstitution(t *testing.T, substitutionJSON, variable string) string 
 	  "substitutions": {"resources.db.field": ` + substitutionJSON + `}
 	}`
 
-	path := filepath.Join(t.TempDir(), "inputs.json")
-	require.NoError(t, os.WriteFile(path, []byte(inputsJSON), 0o600))
-
-	in, err := readResourceInputs(path)
-	require.NoError(t, err)
-
-	out, err := scoreWorkloadToCloudRunService(in)
-	require.NoError(t, err)
-	require.Len(t, out.Manifests, 1)
-
-	var service servingv1.Service
-	require.NoError(t, utils.DecodeViaJSON(out.Manifests[0], &service))
+	service := convert(t, inputsJSON, newFakeSecretSaver())
 	require.Len(t, service.Spec.Template.Spec.Containers, 1)
 
 	env := service.Spec.Template.Spec.Containers[0].Env
