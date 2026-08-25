@@ -150,7 +150,7 @@ func ReplaceAllPlaceholdersInString(str string, placeholderStrs map[string]strin
 	return s.String(), nil
 }
 
-// ReplaceAllPlaceholders returns a copy of an an untyped structure made up of
+// ReplaceAllPlaceholders returns a copy of an untyped structure made up of
 // either []any or map[string]any with any placeholders replaced.
 //
 // See ReplaceAllPlaceholdersInString for details of placeholderStrs and
