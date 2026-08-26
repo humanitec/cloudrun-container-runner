@@ -32,8 +32,24 @@ func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (str
 }
 
 // convert runs the converter over inputsJSON and decodes the single manifest it
-// produces.
+// produces, with no runtime service account.
 func convert(t *testing.T, inputsJSON string, saver secretSaver) servingv1.Service {
+	t.Helper()
+	return convertAs(t, inputsJSON, "", saver)
+}
+
+// convertAs is convert for a workload that runs as serviceAccount.
+func convertAs(t *testing.T, inputsJSON, serviceAccount string, saver secretSaver) servingv1.Service {
+	t.Helper()
+
+	var service servingv1.Service
+	require.NoError(t, utils.DecodeViaJSON(convertToMap(t, inputsJSON, serviceAccount, saver), &service))
+	return service
+}
+
+// convertToMap is convertAs stopping short of the typed manifest, for the tests
+// that care whether a field is present at all rather than what it decodes to.
+func convertToMap(t *testing.T, inputsJSON, serviceAccount string, saver secretSaver) map[string]any {
 	t.Helper()
 
 	inputsPath := filepath.Join(t.TempDir(), "inputs.json")
@@ -42,13 +58,11 @@ func convert(t *testing.T, inputsJSON string, saver secretSaver) servingv1.Servi
 	in, err := readResourceInputs(inputsPath)
 	require.NoError(t, err)
 
-	out, err := scoreWorkloadToCloudRunService(t.Context(), in, saver)
+	out, err := scoreWorkloadToCloudRunService(t.Context(), in, serviceAccount, saver)
 	require.NoError(t, err)
 	require.Len(t, out.Manifests, 1)
 
-	var service servingv1.Service
-	require.NoError(t, utils.DecodeViaJSON(out.Manifests[0], &service))
-	return service
+	return out.Manifests[0]
 }
 
 func TestEnvVarSecretIsSavedAndReferencedByVersion(t *testing.T) {

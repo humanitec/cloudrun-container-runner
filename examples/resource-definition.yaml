@@ -40,6 +40,8 @@ entity:
           # Only the path to the key, never the key itself. Relative, so it
           # resolves inside shared_directory once the entrypoint cd's there.
           GOOGLE_APPLICATION_CREDENTIALS: credentials.json
+          # The identity the deployed service runs as.
+          CLOUDRUN_RUNTIME_SERVICE_ACCOUNT: cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com
 
     secret_refs:
       # The service account key itself. The Operator reads it from your secret

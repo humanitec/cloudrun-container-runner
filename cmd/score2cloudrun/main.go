@@ -26,7 +26,10 @@ import (
 
 var version = "dev"
 
-const CloudRunExtensionName = "cloudrun"
+const (
+	CloudRunExtensionName    = "cloudrun"
+	EnvRuntimeServiceAccount = "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT"
+)
 
 type SecretRef struct {
 	Store   string `json:"store,omitempty"`
@@ -103,7 +106,7 @@ type secretSaver interface {
 
 // scoreWorkloadToCloudRunService converts a Score workload into a Cloud Run service manifest.
 // Any secret the workload resolves is written to gsm secrets, and the manifest references its version.
-func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, secrets secretSaver) (WorkloadOutput, error) {
+func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, serviceAccount string, secrets secretSaver) (WorkloadOutput, error) {
 	workloadName := in.Id
 	workload := in.Spec
 	var converter score.K8sScoreConverter
@@ -242,6 +245,8 @@ func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, secr
 		ObjectMeta: metav1.ObjectMeta{},
 		Spec:       podSpec,
 	}
+	// The ServiceAccountName field is omitempty, so an empty account leaves the manifest exactly as it was.
+	pod.Spec.ServiceAccountName = serviceAccount
 	if ext := in.Extensions[CloudRunExtensionName]; ext != nil {
 		pod, err = applyExtensionToPod(pod, ext)
 		if err != nil {
@@ -376,6 +381,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	serviceAccount := os.Getenv(EnvRuntimeServiceAccount)
+
 	secrets := secretmanager.New(google.TargetFromEnv())
 	defer func() {
 		if err := secrets.Close(); err != nil {
@@ -383,7 +390,7 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	out, err := scoreWorkloadToCloudRunService(ctx, in, secrets)
+	out, err := scoreWorkloadToCloudRunService(ctx, in, serviceAccount, secrets)
 	if err != nil {
 		return fmt.Errorf("converting the Score workload into a Cloud Run service: %w", err)
 	}
