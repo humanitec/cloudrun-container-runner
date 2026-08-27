@@ -29,6 +29,10 @@ var version = "dev"
 const (
 	CloudRunExtensionName    = "cloudrun"
 	EnvRuntimeServiceAccount = "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT"
+
+	// defaultOutputPath is where the manifest lands without -output. The
+	// entrypoint names the same file explicitly, so the two stay legible apart.
+	defaultOutputPath = "service.yaml"
 )
 
 type SecretRef struct {
@@ -351,17 +355,15 @@ func main() {
 }
 
 // run converts the Score workload named on the command line into a Cloud Run
-// service manifest on stdout.
-//
-// Nothing else may go to stdout: the entrypoint redirects it straight into
-// service.yaml. Diagnostics belong on stderr, which lands in the Job log.
+// service manifest, written as YAML to the file named by -output.
 func run(ctx context.Context) error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
+	outputPath := flag.String("output", defaultOutputPath, "file to write the service manifest to")
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		_, _ = fmt.Fprintf(out, "Usage: %s [flags] RESOURCE_INPUTS_FILE\n\n", filepath.Base(os.Args[0]))
 		_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
-			"service manifest, written to stdout as YAML.\n\nFlags:\n")
+			"service manifest, written as YAML to the file named by -output.\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -405,7 +407,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("serialising the service manifest: %w", err)
 	}
-	if _, err := os.Stdout.Write(manifest); err != nil {
+	if err := os.WriteFile(*outputPath, manifest, 0o600); err != nil {
 		return fmt.Errorf("writing the service manifest: %w", err)
 	}
 	return nil
