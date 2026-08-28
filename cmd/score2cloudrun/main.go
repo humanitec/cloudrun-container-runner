@@ -450,12 +450,8 @@ func run(ctx context.Context) error {
 // create converts the workload into a service manifest, writes it to
 // outputPath, and when deploy is set applies it to Cloud Run.
 func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
-	secrets := secretmanager.New(target)
-	defer func() {
-		if err := secrets.Close(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
-		}
-	}()
+	secrets := secretmanager.New(target, in.Id)
+	defer closeSecrets(secrets)
 
 	out, err := scoreWorkloadToCloudRunService(ctx, in, os.Getenv(EnvRuntimeServiceAccount), secrets)
 	if err != nil {
@@ -479,6 +475,10 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 	if err != nil {
 		return err
 	}
+
+	if err := secrets.DeleteUnused(ctx); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: cleaning up the secrets the workload no longer references: %v\n", err)
+	}
 	return writeDriverOutputs(result)
 }
 
@@ -492,7 +492,19 @@ func destroy(ctx context.Context, target google.Target, service string) error {
 	if err := cloudrun.New(target).Delete(ctx, service); err != nil {
 		return err
 	}
+
+	secrets := secretmanager.New(target, service)
+	defer closeSecrets(secrets)
+	if err := secrets.DeleteUnused(ctx); err != nil {
+		return fmt.Errorf("deleting the secrets of service %s: %w", service, err)
+	}
 	return writeDriverOutputs(map[string]any{})
+}
+
+func closeSecrets(secrets *secretmanager.Client) {
+	if err := secrets.Close(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
+	}
 }
 
 // writeManifest serialises the service manifest as YAML.
