@@ -2,15 +2,23 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 )
 
-func anyToString(val any) (string, error) {
-	if str, ok := val.(string); ok {
-		return str, nil
+func writeJSON(path string, v any) error {
+	if path == "" {
+		return nil
 	}
-	b, err := json.Marshal(val)
+	b, err := json.Marshal(v)
 	if err != nil {
-		return "", err
+		return err
 	}
-	return string(b), nil
+	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

@@ -32,6 +32,19 @@ func runWith(t *testing.T, args ...string) error {
 	return run(t.Context())
 }
 
+// helloWorldInputs is the smallest workload that converts, for the tests that
+// are about the runner around the conversion rather than the conversion itself.
+const helloWorldInputs = `{
+  "id": "hello-world-dev",
+  "spec": {
+    "apiVersion": "score.dev/v1b1",
+    "metadata": {"name": "hello-world"},
+    "containers": {
+      "main": {"image": "busybox:latest"}
+    }
+  }
+}`
+
 // inputsFile writes helloWorldInputs somewhere run can read it.
 func inputsFile(t *testing.T) string {
 	t.Helper()
@@ -108,26 +121,18 @@ func TestRunNeedsAnInputsFile(t *testing.T) {
 	assert.Contains(t, err.Error(), EnvResourceInputsFile)
 }
 
-func TestWriteDriverOutputsPublishesBothFiles(t *testing.T) {
-	dir := t.TempDir()
-	outputs := filepath.Join(dir, "outputs.json")
-	secretOutputs := filepath.Join(dir, "secret-outputs.json")
-	t.Setenv(EnvOutputsFile, outputs)
-	t.Setenv(EnvSecretOutputsFile, secretOutputs)
+// The Driver reads the deployment outputs back from OUTPUTS_FILE.
+func TestWriteJSONPublishesTheOutputs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outputs.json")
 
-	require.NoError(t, writeDriverOutputs(map[string]any{"url": "https://example.run.app"}))
+	require.NoError(t, writeJSON(path, map[string]any{"url": "https://example.run.app"}))
 
-	assert.JSONEq(t, `{"url": "https://example.run.app"}`, read(t, outputs))
-	// Nothing the runner produces is sensitive, but the Driver still wants the file.
-	assert.JSONEq(t, `{}`, read(t, secretOutputs))
+	assert.JSONEq(t, `{"url": "https://example.run.app"}`, read(t, path))
 }
 
-// Run by hand there is no Driver to write outputs for, and no files to write.
-func TestWriteDriverOutputsSkipsFilesNobodyAskedFor(t *testing.T) {
-	t.Setenv(EnvOutputsFile, "")
-	t.Setenv(EnvSecretOutputsFile, "")
-
-	assert.NoError(t, writeDriverOutputs(map[string]any{}))
+// Run by hand there is no Driver to write outputs for, and no file to write.
+func TestWriteJSONSkipsAFileNobodyAskedFor(t *testing.T) {
+	assert.NoError(t, writeJSON("", map[string]any{}))
 }
 
 // The Orchestrator shows ERROR_FILE as the deployment error message, so
