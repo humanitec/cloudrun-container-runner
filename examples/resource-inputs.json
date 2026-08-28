@@ -1,5 +1,5 @@
 {
-  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and the entrypoint hands to score2cloudrun. Mirrors ResourceInputs in cmd/score2cloudrun/main.go: id, spec, substitutions, extensions. Keys the Runner does not recognise are ignored. The deployment target is deliberately absent: gcloud reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition.",
+  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and names in $RESOURCE_INPUTS_FILE. Mirrors ResourceInputs in cmd/score2cloudrun/main.go: id, spec, substitutions, extensions. Keys the Runner does not recognise are ignored. The deployment target is deliberately absent: score2cloudrun reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition.",
 
   "id": "hello-world-dev",
 

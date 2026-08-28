@@ -10,14 +10,17 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/score-spec/score-go/types"
+	runv1 "google.golang.org/api/run/v1"
 	core "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
+	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
@@ -27,12 +30,33 @@ import (
 var version = "dev"
 
 const (
-	CloudRunExtensionName    = "cloudrun"
+	CloudRunExtensionName = "cloudrun"
+
+	// The Container Driver runs this binary as the runner container of a Kubernetes Job
+	// and talks to it purely through the environment.
+
+	EnvAction             = "ACTION"
+	EnvResourceInputsFile = "RESOURCE_INPUTS_FILE"
+	EnvOutputsFile        = "OUTPUTS_FILE"
+	EnvSecretOutputsFile  = "SECRET_OUTPUTS_FILE"
+	EnvErrorFile          = "ERROR_FILE"
+	EnvScriptsDirectory   = "SCRIPTS_DIRECTORY"
+
+	// EnvRuntimeServiceAccount names the identity the deployed service runs as,
+	// as opposed to the one this binary deploys with.
 	EnvRuntimeServiceAccount = "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT"
 
-	// defaultOutputPath is where the manifest lands without -output. The
-	// entrypoint names the same file explicitly, so the two stay legible apart.
+	// ActionCreate and ActionDestroy are the two halves of a resource's life,
+	// and the only values the Driver puts in ACTION.
+	ActionCreate  = "create"
+	ActionDestroy = "destroy"
+
+	// defaultOutputPath is where the manifest lands without -output.
 	defaultOutputPath = "service.yaml"
+
+	// defaultTimeout bounds the wait for Cloud Run to settle a deployment. A
+	// service that has not come up by then is not going to.
+	defaultTimeout = 10 * time.Minute
 )
 
 type SecretRef struct {
@@ -58,7 +82,7 @@ type ResourceInputs struct {
 }
 
 type WorkloadOutput struct {
-	Manifests []map[string]any
+	Manifests []*runv1.Service
 }
 
 func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
@@ -304,25 +328,26 @@ func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, serv
 			//RouteSpec:         servingv1.RouteSpec{},
 		},
 	}
-	serviceAsMap, err := utils.AsMap(service)
-	if err != nil {
+	// The Knative types and the Admin API's own are the same schema from two
+	// generators, so the translation is a JSON round trip. Doing it here means
+	// what -output shows is what gets deployed, rather than a second rendering.
+	var manifest runv1.Service
+	if err := utils.DecodeViaJSON(service, &manifest); err != nil {
 		return WorkloadOutput{}, fmt.Errorf("unable to marshal knative service manifest: %w", err)
 	}
 	// TODO: apply extensions to Service
 
 	return WorkloadOutput{
-		Manifests: []map[string]any{
-			serviceAsMap,
-		},
+		Manifests: []*runv1.Service{&manifest},
 	}, nil
 
 }
 
-// readResourceInputs loads RESOURCE_INPUTS_FILE, the JSON the Container Driver
-// writes for the runner, and the entrypoint passes to us as an argument. See
-// examples/resource-inputs.json. Keys the runner does not recognise are
-// ignored; the deployment target is not in here at all, it reaches gcloud
-// through CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION.
+// readResourceInputs loads the JSON the Container Driver writes for the runner:
+// the Score workload, the substitutions for its placeholders and the Cloud Run
+// extension. See examples/resource-inputs.json. Keys the runner does not
+// recognise are ignored; the deployment target is not in here at all, it
+// arrives through CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION.
 func readResourceInputs(path string) (ResourceInputs, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -350,22 +375,21 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 func main() {
 	if err := run(context.Background()); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
+		reportError(err)
 		os.Exit(1)
 	}
 }
 
 // run converts the Score workload named on the command line into a Cloud Run
-// service manifest, written as YAML to the file named by -output.
+// service manifest, written as YAML to the file named by -output. With -deploy
+// it applies that manifest to Cloud Run, or deletes the service it describes.
 func run(ctx context.Context) error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	outputPath := flag.String("output", defaultOutputPath, "file to write the service manifest to")
-	flag.Usage = func() {
-		out := flag.CommandLine.Output()
-		_, _ = fmt.Fprintf(out, "Usage: %s [flags] RESOURCE_INPUTS_FILE\n\n", filepath.Base(os.Args[0]))
-		_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
-			"service manifest, written as YAML to the file named by -output.\n\nFlags:\n")
-		flag.PrintDefaults()
-	}
+	deploy := flag.Bool("deploy", false, "apply the manifest to Cloud Run rather than only writing it")
+	action := flag.String("action", envOr(EnvAction, ActionCreate), "with -deploy, either \"create\" or \"destroy\"")
+	timeout := flag.Duration("timeout", defaultTimeout, "how long to wait for Cloud Run to settle the deployment")
+	flag.Usage = usage
 	flag.Parse()
 
 	if *printVersion {
@@ -373,42 +397,185 @@ func run(ctx context.Context) error {
 		return nil
 	}
 
-	if flag.NArg() != 1 {
+	inputsPath := os.Getenv(EnvResourceInputsFile)
+	switch flag.NArg() {
+	case 0:
+		if inputsPath == "" {
+			flag.Usage()
+			return fmt.Errorf("no resource inputs file: pass one as an argument or set %s", EnvResourceInputsFile)
+		}
+	case 1:
+		inputsPath = flag.Arg(0)
+	default:
 		flag.Usage()
-		return fmt.Errorf("expected one argument, the resource inputs file, got %d", flag.NArg())
+		return fmt.Errorf("expected at most one argument, the resource inputs file, got %d", flag.NArg())
 	}
 
-	in, err := readResourceInputs(flag.Arg(0))
+	if *action != ActionCreate && *action != ActionDestroy {
+		return fmt.Errorf("unsupported -action %q, expected %q or %q", *action, ActionCreate, ActionDestroy)
+	}
+	if *action == ActionDestroy && !*deploy {
+		return fmt.Errorf("-action %s needs -deploy: there is nothing to destroy short of Cloud Run itself", ActionDestroy)
+	}
+
+	// The Driver expects the runner to work inside the shared directory, and
+	// every relative path it hands over resolves against it: the credentials
+	// file, the outputs files and the error file alike.
+	if dir := os.Getenv(EnvScriptsDirectory); dir != "" {
+		if err := os.Chdir(dir); err != nil {
+			return fmt.Errorf("entering the working directory %s: %w", dir, err)
+		}
+	}
+
+	in, err := readResourceInputs(inputsPath)
 	if err != nil {
 		return err
 	}
 
-	serviceAccount := os.Getenv(EnvRuntimeServiceAccount)
+	target := google.TargetFromEnv()
+	if !*deploy {
+		return create(ctx, in, target, *outputPath, false)
+	}
 
-	secrets := secretmanager.New(google.TargetFromEnv())
+	// Everything past here waits on Cloud Run, so it is bounded.
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+
+	if *action == ActionDestroy {
+		return destroy(ctx, target, in.Id)
+	}
+	return create(ctx, in, target, *outputPath, true)
+}
+
+// create converts the workload into a service manifest, writes it to
+// outputPath, and when deploy is set applies it to Cloud Run.
+func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
+	secrets := secretmanager.New(target)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
 		}
 	}()
 
-	out, err := scoreWorkloadToCloudRunService(ctx, in, serviceAccount, secrets)
+	out, err := scoreWorkloadToCloudRunService(ctx, in, os.Getenv(EnvRuntimeServiceAccount), secrets)
 	if err != nil {
 		return fmt.Errorf("converting the Score workload into a Cloud Run service: %w", err)
 	}
-
-	// The entrypoint reads .metadata.name off the whole file and feeds it to
-	// `gcloud run services replace`, so exactly one document has to come out.
+	// A Cloud Run deployment is one service, so anything else is a bug in the
+	// converter rather than something to hand on to the API.
 	if len(out.Manifests) != 1 {
 		return fmt.Errorf("expected exactly one manifest, got %d", len(out.Manifests))
 	}
+	manifest := out.Manifests[0]
 
-	manifest, err := yaml.Marshal(out.Manifests[0])
+	if err := writeManifest(outputPath, manifest); err != nil {
+		return err
+	}
+	if !deploy {
+		return nil
+	}
+
+	result, err := cloudrun.New(target).Deploy(ctx, manifest)
+	if err != nil {
+		return err
+	}
+	return writeDriverOutputs(result)
+}
+
+// destroy deletes the Cloud Run service the workload deployed to.
+//
+// It deliberately skips the conversion, which would resolve the workload's
+// secrets and write them to Secret Manager on the way to a manifest nobody is
+// going to deploy. The service name is the resource id, the same thing the
+// converter would have put in metadata.name.
+func destroy(ctx context.Context, target google.Target, service string) error {
+	if err := cloudrun.New(target).Delete(ctx, service); err != nil {
+		return err
+	}
+	return writeDriverOutputs(map[string]any{})
+}
+
+// writeManifest serialises the service manifest as YAML.
+func writeManifest(path string, manifest *runv1.Service) error {
+	b, err := yaml.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("serialising the service manifest: %w", err)
 	}
-	if err := os.WriteFile(*outputPath, manifest, 0o600); err != nil {
+	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("writing the service manifest: %w", err)
 	}
 	return nil
+}
+
+// writeDriverOutputs publishes the workload's outputs where the Container
+// Driver reads them back. Nothing the runner produces is sensitive, so the
+// secret outputs are always an empty object, but the Driver still wants a file.
+func writeDriverOutputs(outputs any) error {
+	if err := writeJSON(os.Getenv(EnvOutputsFile), outputs); err != nil {
+		return fmt.Errorf("writing the deployment outputs: %w", err)
+	}
+	if err := writeJSON(os.Getenv(EnvSecretOutputsFile), map[string]any{}); err != nil {
+		return fmt.Errorf("writing the secret deployment outputs: %w", err)
+	}
+	return nil
+}
+
+// writeJSON serialises v to path. An empty path means nothing asked for the
+// file, which is the normal case when score2cloudrun runs outside a Job.
+func writeJSON(path string, v any) error {
+	if path == "" {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
+}
+
+// reportError appends reason to ERROR_FILE, which the Orchestrator shows as the
+// deployment error message. The Driver may not have named one, in which case
+// the Job log is the only record and stderr has already carried it there.
+func reportError(reason error) {
+	path := os.Getenv(EnvErrorFile)
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: opening %s: %v\n", path, err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := fmt.Fprintln(f, reason); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: writing %s: %v\n", path, err)
+	}
+}
+
+// envOr returns the environment variable name, or fallback when it is unset.
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func usage() {
+	out := flag.CommandLine.Output()
+	_, _ = fmt.Fprintf(out, "Usage: %s [flags] [RESOURCE_INPUTS_FILE]\n\n", filepath.Base(os.Args[0]))
+	_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
+		"service manifest, written as YAML to the file named by -output. With\n"+
+		"-deploy the manifest is applied to Cloud Run as well.\n\n"+
+		"RESOURCE_INPUTS_FILE defaults to $"+EnvResourceInputsFile+".\n\nFlags:\n")
+	flag.PrintDefaults()
+	_, _ = fmt.Fprint(out, "\nEnvironment:\n"+
+		"  "+google.EnvProject+"\n\tthe Google Cloud project to deploy into\n"+
+		"  "+google.EnvRegion+"\n\tthe Cloud Run region to deploy into\n"+
+		"  "+EnvRuntimeServiceAccount+"\n\tthe identity the deployed service runs as\n"+
+		"  GOOGLE_APPLICATION_CREDENTIALS\n\ta service account key or external account configuration;\n"+
+		"\twithout one the credentials come from the metadata server\n"+
+		"  "+EnvScriptsDirectory+"\n\tworking directory to enter first, which every other\n"+
+		"\trelative path resolves against\n"+
+		"  "+EnvAction+", "+EnvOutputsFile+", "+EnvSecretOutputsFile+", "+EnvErrorFile+"\n"+
+		"\tthe Container Driver's side of the contract\n")
 }
