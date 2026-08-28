@@ -33,12 +33,13 @@ entity:
         namespace: humanitec-runner
 
         variables:
-          # gcloud reads these two natively, which is why the entrypoint passes
-          # no --project or --region flags of its own.
+          # These two keep gcloud's names, even though the Runner calls the
+          # Cloud Run Admin API directly, so that Resource Definitions written
+          # against earlier versions go on working.
           CLOUDSDK_CORE_PROJECT: my-gcp-project
           CLOUDSDK_RUN_REGION: europe-west1
           # Only the path to the key, never the key itself. Relative, so it
-          # resolves inside shared_directory once the entrypoint cd's there.
+          # resolves inside shared_directory, which the Runner enters first.
           GOOGLE_APPLICATION_CREDENTIALS: credentials.json
           # The identity the deployed service runs as.
           CLOUDRUN_RUNTIME_SERVICE_ACCOUNT: cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com

@@ -62,7 +62,9 @@ func convertToMap(t *testing.T, inputsJSON, serviceAccount string, saver secretS
 	require.NoError(t, err)
 	require.Len(t, out.Manifests, 1)
 
-	return out.Manifests[0]
+	manifest, err := utils.AsMap(out.Manifests[0])
+	require.NoError(t, err)
+	return manifest
 }
 
 func TestEnvVarSecretIsSavedAndReferencedByVersion(t *testing.T) {
