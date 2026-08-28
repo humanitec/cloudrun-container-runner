@@ -30,10 +30,6 @@ func DecodeViaJSON(in, out any) error {
 	return err
 }
 
-func ToPtr[T any](t T) *T {
-	return &t
-}
-
 func DecodeToString(in any) (string, error) {
 	if str, ok := in.(string); ok {
 		return str, nil
