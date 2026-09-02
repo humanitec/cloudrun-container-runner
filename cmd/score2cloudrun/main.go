@@ -139,13 +139,13 @@ func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, serv
 							return nil, fmt.Errorf("secret with name %s: secret references are not supported: require secret value to be provided", name)
 						}
 						isSecret = true
-						str, err := anyToString(output.Secret.Value)
+						str, err := utils.DecodeToString(output.Secret.Value)
 						if err != nil {
 							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 						}
 						placeholderStrs[placeholder] = str
 					} else if output.Value != nil {
-						str, err := anyToString(output.Value)
+						str, err := utils.DecodeToString(output.Value)
 						if err != nil {
 							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 						}
@@ -215,7 +215,7 @@ func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, serv
 				return core.Volume{}, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
 			}
 			// Save the secret to GSM and createVolume spec
-			str, err := anyToString(content.Secret.Value)
+			str, err := utils.DecodeToString(content.Secret.Value)
 			if err != nil {
 				return core.Volume{}, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
 			}

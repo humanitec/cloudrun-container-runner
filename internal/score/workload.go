@@ -7,7 +7,6 @@
 package score
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/score-spec/score-go/types"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
+	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
 var (
@@ -279,14 +279,8 @@ func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName st
 		}
 		if output.Secret != nil {
 			if output.Secret.Value != nil {
-				if str, ok := output.Secret.Value.(string); ok {
-					placeholderStrs[placeholder] = str
-				} else {
-					b, err := json.Marshal(output.Value)
-					if err != nil {
-						return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-					}
-					placeholderStrs[placeholder] = string(b)
+				if placeholderStrs[placeholder], err = utils.DecodeToString(output.Secret.Value); err != nil {
+					return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 				}
 				isOutputSecret = true
 			} else {
@@ -298,14 +292,8 @@ func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName st
 				}
 			}
 		} else if output.Value != nil {
-			if str, ok := output.Value.(string); ok {
-				placeholderStrs[placeholder] = str
-			} else {
-				b, err := json.Marshal(output.Value)
-				if err != nil {
-					return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-				}
-				placeholderStrs[placeholder] = string(b)
+			if placeholderStrs[placeholder], err = utils.DecodeToString(output.Value); err != nil {
+				return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 			}
 		}
 	}

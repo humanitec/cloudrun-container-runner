@@ -3,7 +3,6 @@ package score
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
@@ -143,14 +142,8 @@ func (c *K8sScoreConverter) EnvVar(containerName string) ([]core.EnvVar, error) 
 					secretVars[placeholder] = output.Secret
 					placeholderStrs[placeholder] = "$(" + placeholderToVar(placeholder) + ")"
 				} else if output.Value != nil {
-					if str, ok := output.Value.(string); ok {
-						placeholderStrs[placeholder] = str
-					} else {
-						b, err := json.Marshal(output.Value)
-						if err != nil {
-							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-						}
-						placeholderStrs[placeholder] = string(b)
+					if placeholderStrs[placeholder], err = utils.DecodeToString(output.Value); err != nil {
+						return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 					}
 				}
 			}

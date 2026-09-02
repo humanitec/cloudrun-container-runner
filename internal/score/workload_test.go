@@ -588,6 +588,12 @@ func TestExpandFile(t *testing.T) {
 			"resources.cache.password": {Secret: &inputs.SecretInput{
 				Value: "r3di5-p455w0rd",
 			}},
+			"resources.cache.db_index": {Secret: &inputs.SecretInput{
+				Value: 7,
+			}},
+			"resources.cache.tls": {Secret: &inputs.SecretInput{
+				Value: map[string]any{"ca": "root-ca", "verify": true},
+			}},
 		},
 		Name: "workloads.test",
 	}
@@ -651,6 +657,26 @@ func TestExpandFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
 			Value: "redis://redis_user:r3di5-p455w0rd@cache.example.com:6379/redis",
+		}}, output)
+	})
+	t.Run("secret with number value", func(t *testing.T) {
+		file := types.ContainerFile{
+			Content: ptrStr("redis://${resources.cache.host}:${resources.cache.port}/${resources.cache.db_index}"),
+		}
+		output, err := wr.ExpandFile(file, "one")
+		require.NoError(t, err)
+		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+			Value: "redis://cache.example.com:6379/7",
+		}}, output)
+	})
+	t.Run("secret with object value", func(t *testing.T) {
+		file := types.ContainerFile{
+			Content: ptrStr("tls = ${resources.cache.tls}"),
+		}
+		output, err := wr.ExpandFile(file, "one")
+		require.NoError(t, err)
+		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+			Value: `tls = {"ca":"root-ca","verify":true}`,
 		}}, output)
 	})
 
