@@ -47,7 +47,7 @@ func strFirstN(s string, n int) string {
 	if n > l {
 		return s
 	}
-	return s[0 : n-1]
+	return s[:n]
 }
 func strLastN(s string, n int) string {
 	l := len(s)

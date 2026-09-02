@@ -67,6 +67,54 @@ func testContainerFileResolver_RecordVolumes(t *testing.T, dirCache map[string]s
 	}
 }
 
+func TestStrFirstN(t *testing.T) {
+	testCases := []struct {
+		name string
+		s    string
+		n    int
+		want string
+	}{
+		{name: "shorter than n", s: "abc", n: 5, want: "abc"},
+		{name: "exactly n", s: "abcde", n: 5, want: "abcde"},
+		{name: "longer than n", s: "abcdefgh", n: 5, want: "abcde"},
+		{name: "one character", s: "abcdefgh", n: 1, want: "a"},
+		{name: "none", s: "abcdefgh", n: 0, want: ""},
+		{name: "empty string", s: "", n: 5, want: ""},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, strFirstN(tc.s, tc.n))
+			assert.Len(t, strFirstN(tc.s, tc.n), min(tc.n, len(tc.s)))
+		})
+	}
+}
+func TestStrLastN(t *testing.T) {
+	testCases := []struct {
+		name string
+		s    string
+		n    int
+		want string
+	}{
+		{name: "shorter than n", s: "abc", n: 5, want: "abc"},
+		{name: "exactly n", s: "abcde", n: 5, want: "abcde"},
+		{name: "longer than n", s: "abcdefgh", n: 5, want: "defgh"},
+		{name: "one character", s: "abcdefgh", n: 1, want: "h"},
+		{name: "none", s: "abcdefgh", n: 0, want: ""},
+		{name: "empty string", s: "", n: 5, want: ""},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, strLastN(tc.s, tc.n))
+			assert.Len(t, strLastN(tc.s, tc.n), min(tc.n, len(tc.s)))
+		})
+	}
+}
+func TestVolumeNamePartsAreTheRequestedLength(t *testing.T) {
+	hash := hashStr("hello-world-dev-main-/a/b")
+	require.Len(t, hash, 40, "sha1 hex is 40 characters, so 30 of them is a real truncation")
+	assert.Len(t, strFirstN(hash, 30), 30)
+	assert.Len(t, strLastN(strings.Repeat("a-", 40), 32), 32)
+}
 func TestEscapeK8sEnvVar(t *testing.T) {
 	t.Run("empty string", func(t *testing.T) {
 		assert.Equal(t, "", escapeK8sEnvVar(""))
