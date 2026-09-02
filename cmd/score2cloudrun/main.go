@@ -47,6 +47,12 @@ const (
 	// as opposed to the one this binary deploys with.
 	EnvRuntimeServiceAccount = "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT"
 
+	// EnvServiceName is the name of the Cloud Run service.
+	EnvServiceName = "CLOUDRUN_SERVICE_NAME"
+
+	// EnvServiceNamePrefix is the prefix of the Cloud Run service name.
+	EnvServiceNamePrefix = "CLOUDRUN_SERVICE_NAME_PREFIX"
+
 	ActionCreate  = "create"
 	ActionDestroy = "destroy"
 
@@ -128,6 +134,16 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 	return in, nil
 }
 
+func getServiceName(workloadName string) string {
+	if name := os.Getenv(EnvServiceName); name != "" {
+		return name
+	}
+	if prefix := os.Getenv(EnvServiceNamePrefix); prefix != "" {
+		return prefix + "-" + workloadName
+	}
+	return workloadName
+}
+
 func run(ctx context.Context) error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	outputPath := flag.String("output", defaultOutputPath, "file to write the service manifest to")
@@ -160,7 +176,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("unsupported -action %q, expected %q or %q", *action, ActionCreate, ActionDestroy)
 	}
 	if *action == ActionDestroy && !*deploy {
-		return fmt.Errorf("-action %s needs -deploy: there is nothing to destroy short of Cloud Run itself", ActionDestroy)
+		return fmt.Errorf("-action %s needs -deploy: there is nothing to do for a destroy unless the deployment happens", ActionDestroy)
 	}
 
 	// The Driver expects the runner to work inside the shared directory (the output files, the error file, the credentials file).
@@ -185,7 +201,7 @@ func run(ctx context.Context) error {
 	defer cancel()
 
 	if *action == ActionDestroy {
-		return destroy(ctx, target, in.Id)
+		return destroy(ctx, target, getServiceName(in.Id))
 	}
 	return create(ctx, in, target, *outputPath, true)
 }
@@ -193,7 +209,8 @@ func run(ctx context.Context) error {
 // create converts the workload into a service manifest, writes it to
 // outputPath, and when deploy is set applies it to Cloud Run.
 func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
-	secrets := secretmanager.New(target, in.Id)
+	serviceName := getServiceName(in.Id)
+	secrets := secretmanager.New(target, serviceName)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
@@ -201,7 +218,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 	}()
 
 	manifest, err := scorecloudrun.FromScoreWorkload(ctx, scorecloudrun.Options{
-		Name:           in.Id,
+		Name:           serviceName,
 		Workload:       &in.Spec,
 		Substitutions:  substitutionsToInputs(in.Substitutions),
 		Extension:      in.Extensions[scorecloudrun.ExtensionName],

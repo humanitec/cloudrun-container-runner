@@ -54,6 +54,20 @@ func inputsFile(t *testing.T) string {
 	return path
 }
 
+// serviceName reads the service name out of a manifest run has written.
+func serviceName(t *testing.T, path string) string {
+	t.Helper()
+
+	var service map[string]any
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, yaml.Unmarshal(b, &service))
+
+	metadata, ok := service["metadata"].(map[string]any)
+	require.True(t, ok, "manifest has no metadata")
+	return metadata["name"].(string)
+}
+
 // Converting is what the binary does on its own. Deploying is the image's
 // doing, through the -deploy in its entrypoint, so a bare run must not reach
 // for Google credentials.
@@ -70,6 +84,86 @@ func TestRunWritesTheManifestAndStops(t *testing.T) {
 
 	assert.Equal(t, "serving.knative.dev/v1", service["apiVersion"])
 	assert.Equal(t, "hello-world-dev", service["metadata"].(map[string]any)["name"])
+}
+
+// The resource id names the service unless the Resource Definition says
+// otherwise, which is how one Orchestrator resource reaches a service named for
+// the app and environment around it.
+func TestGetServiceName(t *testing.T) {
+	testCases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "neither set",
+			want: "hello-world-dev",
+		},
+		{
+			name: "prefix",
+			env:  map[string]string{EnvServiceNamePrefix: "myapp-myenv"},
+			want: "myapp-myenv-hello-world-dev",
+		},
+		{
+			name: "full name",
+			env:  map[string]string{EnvServiceName: "chosen-by-hand"},
+			want: "chosen-by-hand",
+		},
+		{
+			// The full name is the more specific of the two, so it wins rather
+			// than being prefixed in turn.
+			name: "full name beats prefix",
+			env: map[string]string{
+				EnvServiceName:       "chosen-by-hand",
+				EnvServiceNamePrefix: "myapp-myenv",
+			},
+			want: "chosen-by-hand",
+		},
+		{
+			// The Driver passes every variable the Resource Definition declares,
+			// so an input left blank arrives as an empty string rather than unset.
+			name: "empty is unset",
+			env: map[string]string{
+				EnvServiceName:       "",
+				EnvServiceNamePrefix: "",
+			},
+			want: "hello-world-dev",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvServiceName, "")
+			t.Setenv(EnvServiceNamePrefix, "")
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+
+			assert.Equal(t, tc.want, getServiceName("hello-world-dev"))
+		})
+	}
+}
+
+// The name the environment asks for is the one that reaches the manifest, not
+// just the one getServiceName returns.
+func TestRunNamesTheServiceFromTheEnvironment(t *testing.T) {
+	t.Setenv(EnvServiceName, "")
+	t.Setenv(EnvServiceNamePrefix, "myapp-myenv")
+	output := filepath.Join(t.TempDir(), "service.yaml")
+
+	require.NoError(t, runWith(t, "-output", output, inputsFile(t)))
+
+	assert.Equal(t, "myapp-myenv-hello-world-dev", serviceName(t, output))
+}
+
+func TestRunTakesTheServiceNameWholeFromTheEnvironment(t *testing.T) {
+	t.Setenv(EnvServiceName, "chosen-by-hand")
+	t.Setenv(EnvServiceNamePrefix, "myapp-myenv")
+	output := filepath.Join(t.TempDir(), "service.yaml")
+
+	require.NoError(t, runWith(t, "-output", output, inputsFile(t)))
+
+	assert.Equal(t, "chosen-by-hand", serviceName(t, output))
 }
 
 // The Container Driver passes the inputs file through the environment rather
