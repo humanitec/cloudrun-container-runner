@@ -33,3 +33,15 @@ func DecodeViaJSON(in, out any) error {
 func ToPtr[T any](t T) *T {
 	return &t
 }
+
+func DecodeToString(in any) (string, error) {
+	if str, ok := in.(string); ok {
+		return str, nil
+	} else {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+}
