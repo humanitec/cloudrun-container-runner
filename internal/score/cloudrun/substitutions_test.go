@@ -26,7 +26,9 @@ func envForSubstitution(t *testing.T, substitutionJSON, variable string) string 
 	  "substitutions": {"resources.db.field": ` + substitutionJSON + `}
 	}`
 
-	service := convert(t, inputsJSON, newFakeSecretSaver())
+	service, err := FromScoreWorkload(t.Context(), optionsFrom(t, inputsJSON, ""), newFakeSecretSaver())
+	require.NoError(t, err)
+	require.NotNil(t, service)
 	require.Len(t, service.Spec.Template.Spec.Containers, 1)
 
 	env := service.Spec.Template.Spec.Containers[0].Env

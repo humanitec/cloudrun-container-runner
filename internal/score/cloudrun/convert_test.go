@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/score-spec/score-go/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
-	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
 // fakeSecretSaver stands in for Google Secret Manager, recording what would be
@@ -19,6 +19,10 @@ import (
 type fakeSecretSaver struct {
 	saved   map[string]string
 	version string
+
+	// err fails every call, as Secret Manager does when the deployer lacks the
+	// grant or the region is wrong.
+	err error
 }
 
 func newFakeSecretSaver() *fakeSecretSaver {
@@ -26,6 +30,9 @@ func newFakeSecretSaver() *fakeSecretSaver {
 }
 
 func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
 	f.saved[name] = value
 	return f.version, nil
 }
@@ -34,13 +41,24 @@ func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (str
 // converter needs. The converter itself does not know about it, but the
 // fixtures below are easier to read as the JSON that actually arrives.
 type driverInputs struct {
-	Id            string         `json:"id"`
-	Spec          types.Workload `json:"spec"`
-	Substitutions map[string]struct {
-		Secret bool `json:"secret"`
-		Value  any  `json:"value,omitempty"`
-	} `json:"substitutions,omitempty"`
-	Extensions map[string]map[string]any `json:"extensions,omitempty"`
+	Id            string                    `json:"id"`
+	Spec          types.Workload            `json:"spec"`
+	Substitutions map[string]substitution   `json:"substitutions,omitempty"`
+	Extensions    map[string]map[string]any `json:"extensions,omitempty"`
+}
+
+// substitution is one resolved placeholder. A secret arrives either as a value
+// the Operator resolved or as a ref into a store it left alone.
+type substitution struct {
+	Secret bool       `json:"secret"`
+	Value  any        `json:"value,omitempty"`
+	Ref    *secretRef `json:"ref,omitempty"`
+}
+
+type secretRef struct {
+	Store   string `json:"store,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 // optionsFrom turns the Driver's JSON into what FromScoreWorkload takes.
@@ -52,11 +70,18 @@ func optionsFrom(t *testing.T, inputsJSON, serviceAccount string) Options {
 
 	substitutions := make(map[string]inputs.Input, len(in.Substitutions))
 	for key, s := range in.Substitutions {
-		if s.Secret {
+		switch {
+		case s.Secret && s.Ref != nil:
+			substitutions[key] = inputs.Input{Secret: &inputs.SecretInput{
+				Store:   s.Ref.Store,
+				Key:     s.Ref.Ref,
+				Version: s.Ref.Version,
+			}}
+		case s.Secret:
 			substitutions[key] = inputs.Input{Secret: &inputs.SecretInput{Value: s.Value}}
-			continue
+		default:
+			substitutions[key] = inputs.Input{Value: s.Value}
 		}
-		substitutions[key] = inputs.Input{Value: s.Value}
 	}
 
 	return Options{
@@ -68,32 +93,293 @@ func optionsFrom(t *testing.T, inputsJSON, serviceAccount string) Options {
 	}
 }
 
-// convert runs the converter over inputsJSON and decodes the manifest it
-// produces, with no runtime service account.
-func convert(t *testing.T, inputsJSON string, saver SecretSaver) servingv1.Service {
-	t.Helper()
-	return convertAs(t, inputsJSON, "", saver)
-}
+func TestFromScoreWorkload(t *testing.T) {
+	const serviceAccount = "cloudrun-runtime@my-gcp-project.iam.gserviceaccount.com"
 
-// convertAs is convert for a workload that runs as serviceAccount.
-func convertAs(t *testing.T, inputsJSON, serviceAccount string, saver SecretSaver) servingv1.Service {
-	t.Helper()
+	saver := newFakeSecretSaver()
+	saver.version = "7"
 
-	var service servingv1.Service
-	require.NoError(t, utils.DecodeViaJSON(convertToMap(t, inputsJSON, serviceAccount, saver), &service))
-	return service
-}
-
-// convertToMap is convertAs stopping short of the typed manifest, for the tests
-// that care whether a field is present at all rather than what it decodes to.
-func convertToMap(t *testing.T, inputsJSON, serviceAccount string, saver SecretSaver) map[string]any {
-	t.Helper()
-
+	inputsJSON := `{
+	  "id": "hello-world-dev",
+	  "spec": {
+	    "apiVersion": "score.dev/v1b1",
+	    "metadata": {"name": "hello-world"},
+	    "containers": {
+	      "main": {
+	        "image": "busybox:latest",
+	        "variables": {
+	          "DB_HOST": "${resources.db.host}",
+	          "DB_PASSWORD": "${resources.db.password}",
+	          "DB_URL": "postgres://${resources.db.password}@${resources.db.host}/db"
+            },
+	        "files": {
+	          "/etc/app/config.yaml": {"content": "${resources.db.password}", "mode": "0400"}
+	        }
+	      }
+	    },
+	    "resources": {"db": {"type": "postgres"}}
+	  },
+	  "substitutions": {
+        "resources.db.password": {"secret": true, "value": "s3cr3t"},
+        "resources.db.host": {"secret": false, "value": "db.example.com"}
+      }
+	}`
 	service, err := FromScoreWorkload(t.Context(), optionsFrom(t, inputsJSON, serviceAccount), saver)
 	require.NoError(t, err)
 	require.NotNil(t, service)
 
-	manifest, err := utils.AsMap(service)
-	require.NoError(t, err)
-	return manifest
+	wantNameSingle := secretmanager.SecretName("hello-world-dev", "main", "env", "DB_PASSWORD")
+	wantNameCombined := secretmanager.SecretName("hello-world-dev", "main", "env", "DB_URL")
+	wantNameFile := secretmanager.SecretName("hello-world-dev", "main", "vol", "config.yaml")
+
+	// Check container env
+	require.Len(t, service.Spec.Template.Spec.Containers, 1)
+	env := service.Spec.Template.Spec.Containers[0].Env
+	require.Len(t, env, 3)
+
+	assert.Equal(t, "DB_HOST", env[0].Name)
+	assert.Equal(t, "db.example.com", env[0].Value)
+
+	assert.Equal(t, "DB_PASSWORD", env[1].Name)
+	assert.Empty(t, env[1].Value, "the secret must not be inlined into the manifest")
+	require.NotNil(t, env[1].ValueFrom)
+	require.NotNil(t, env[1].ValueFrom.SecretKeyRef)
+	assert.Equal(t, wantNameSingle, env[1].ValueFrom.SecretKeyRef.Name)
+	assert.Equal(t, "7", env[1].ValueFrom.SecretKeyRef.Key, "the manifest pins the version that was just written")
+
+	assert.Equal(t, "DB_URL", env[2].Name)
+	assert.Empty(t, env[2].Value, "the secret must not be inlined into the manifest")
+	require.NotNil(t, env[2].ValueFrom)
+	require.NotNil(t, env[2].ValueFrom.SecretKeyRef)
+	assert.Equal(t, wantNameCombined, env[2].ValueFrom.SecretKeyRef.Name)
+	assert.Equal(t, "7", env[2].ValueFrom.SecretKeyRef.Key, "the manifest pins the version that was just written")
+
+	// Check volumes and mounts
+	volumes := service.Spec.Template.Spec.Volumes
+	require.Len(t, volumes, 1)
+	require.NotNil(t, volumes[0].Secret)
+	assert.Equal(t, wantNameFile, volumes[0].Secret.SecretName)
+
+	require.Len(t, volumes[0].Secret.Items, 1)
+	assert.Equal(t, "7", volumes[0].Secret.Items[0].Key, "the manifest pins the version that was just written")
+	assert.Equal(t, "config.yaml", volumes[0].Secret.Items[0].Path)
+	assert.Equal(t, int64(0o400), volumes[0].Secret.Items[0].Mode)
+
+	mounts := service.Spec.Template.Spec.Containers[0].VolumeMounts
+	require.Len(t, mounts, 1)
+	assert.Equal(t, "/etc/app", mounts[0].MountPath)
+	assert.Equal(t, volumes[0].Name, mounts[0].Name)
+
+	// Check stored secrets
+	assert.Equal(t, map[string]string{
+		wantNameSingle:   "s3cr3t",
+		wantNameCombined: "postgres://s3cr3t@db.example.com/db",
+		wantNameFile:     "s3cr3t",
+	}, saver.saved)
+
+	// Check service account
+	assert.Equal(t, serviceAccount, service.Spec.Template.Spec.ServiceAccountName)
+}
+
+func TestFromScoreWorkload_Failures(t *testing.T) {
+	testCases := []struct {
+		name        string
+		saveErr     error
+		inputsJSON  string
+		wantErrText string
+	}{
+		{
+			name: "no containers",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {}
+			  }
+			}`,
+			wantErrText: "needs at least one container",
+		},
+		{
+			// The Operator resolves secrets and sends flat values for now.
+			// This may change in the future, but for now it's not supported here.
+			name: "a variable holds a secret reference",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "variables": {"DB_PASSWORD": "${resources.db.password}"}
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  },
+			  "substitutions": {
+			    "resources.db.password": {
+			      "secret": true,
+			      "ref": {"store": "gsm", "ref": "projects/1234567890/secrets/db", "version": "3"}
+			    }
+			  }
+			}`,
+			wantErrText: "secret with name DB_PASSWORD: secret references are not supported",
+		},
+		{
+			name: "a file holds a secret reference",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "files": {"/etc/app/config.yaml": {"content": "${resources.db.password}"}}
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  },
+			  "substitutions": {
+			    "resources.db.password": {
+			      "secret": true,
+			      "ref": {"store": "gsm", "ref": "projects/1234567890/secrets/db", "version": "3"}
+			    }
+			  }
+			}`,
+			wantErrText: "file /etc/app/config.yaml: secret references are not supported",
+		},
+		{
+			name:    "secret manager refuses a variable's secret",
+			saveErr: assert.AnError,
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "variables": {"DB_PASSWORD": "${resources.db.password}"}
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  },
+			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			}`,
+			wantErrText: "resolving variable DB_PASSWORD in container main: saving secret to google secret manager",
+		},
+		{
+			name:    "secret manager refuses a file's secret",
+			saveErr: assert.AnError,
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "files": {"/etc/app/config.yaml": {"content": "${resources.db.password}"}}
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  },
+			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			}`,
+			wantErrText: "file /etc/app/config.yaml: saving secret to google secret manager",
+		},
+		{
+			// Cloud Run mounts one secret version per directory, so two files sharing a directory cannot both be mounted.
+			name: "two files in one directory",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "files": {
+			          "/etc/app/config.yaml": {"content": "${resources.db.password}"},
+			          "/etc/app/extra.yaml": {"content": "${resources.db.password}"}
+			        }
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  },
+			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			}`,
+			wantErrText: "cloudrun only supports mounting 1 file per directory",
+		},
+		{
+			// Every mounted file becomes a Secret Manager secret, Cloud Run has no ConfigMap equivalent.
+			name: "a file's content is not a secret",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "files": {"/etc/app/config.yaml": {"content": "log_level: debug"}}
+			      }
+			    }
+			  }
+			}`,
+			wantErrText: "file /etc/app/config.yaml: cloudrun only supports mounting files from google secret manager secrets (gsm)",
+		},
+		{
+			name: "the service has two ports",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {"main": {"image": "busybox:latest"}},
+			    "service": {
+			      "ports": {
+			        "http": {"port": 8080},
+			        "metrics": {"port": 9090}
+			      }
+			    }
+			  }
+			}`,
+			wantErrText: "cloudrun only supports a single port, got 2 ports",
+		},
+		{
+			name: "two containers behind one port",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {"image": "busybox:latest"},
+			      "sidecar": {"image": "busybox:latest"}
+			    },
+			    "service": {"ports": {"http": {"port": 8080}}}
+			  }
+			}`,
+			wantErrText: "cloudrun only supports ingress on a single container",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			saver := newFakeSecretSaver()
+			saver.err = testCase.saveErr
+
+			service, err := FromScoreWorkload(t.Context(), optionsFrom(t, testCase.inputsJSON, ""), saver)
+
+			require.ErrorContains(t, err, testCase.wantErrText)
+			// A manifest alongside an error is one a caller might deploy.
+			assert.Nil(t, service)
+			if testCase.saveErr != nil {
+				assert.ErrorIs(t, err, testCase.saveErr, "the Secret Manager error has to survive wrapping")
+			}
+		})
+	}
 }
