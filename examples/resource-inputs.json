@@ -1,11 +1,9 @@
 {
-  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner. Placeholders in the Resource Definition are already resolved by the Orchestrator at this point.",
+  "_comment": "Sample RESOURCE_INPUTS_FILE, i.e. what the Container Driver writes for the Runner and the entrypoint hands to score2cloudrun. Mirrors ResourceInputs in cmd/score2cloudrun/main.go: id, spec, substitutions, extensions. Keys the Runner does not recognise are ignored. The deployment target is deliberately absent: gcloud reads it from CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION, set through job.variables in the Resource Definition.",
 
-  "project": "my-gcp-project",
-  "region": "europe-west1",
-  "service": "hello-world-dev",
+  "id": "hello-world-dev",
 
-  "score": {
+  "spec": {
     "apiVersion": "score.dev/v1b1",
     "metadata": {
       "name": "hello-world"
@@ -15,7 +13,12 @@
         "image": "us-docker.pkg.dev/cloudrun/container/hello",
         "variables": {
           "GREETING": "hello from Score",
-          "DB_URL": "postgresql://user:pass@10.0.0.5:5432/app"
+          "DB_URL": "${resources.db.uri}"
+        },
+        "volumes": {
+          "/app/backend/data": {
+            "source": "${resources.data}"
+          }
         },
         "resources": {
           "limits": {
@@ -32,13 +35,33 @@
           "targetPort": 8080
         }
       }
+    },
+    "resources": {
+      "db": {
+        "type": "postgres"
+      }
     }
   },
 
-  "scaling": {
-    "min_instances": 0,
-    "max_instances": 10
+  "substitutions": {
+    "resources.db.uri": {
+      "secret": true,
+      "ref": {
+        "store": "gsm",
+        "ref": "projects/1234567890/secrets/hello-world-db-uri",
+        "version": "3"
+      }
+    }
   },
-  "allow_unauthenticated": true,
-  "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+
+  "extensions": {
+    "cloudrun": {
+      "scaling": {
+        "min_instances": 0,
+        "max_instances": 10
+      },
+      "allow_unauthenticated": true,
+      "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+    }
+  }
 }

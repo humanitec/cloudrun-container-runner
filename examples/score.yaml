@@ -9,6 +9,9 @@ containers:
     variables:
       GREETING: "hello from Score"
       DB_URL: ${resources.db.uri}
+    volumes:
+      /app/backend/data:
+        source: ${resources.data}
     resources:
       limits:
         cpu: "1"
@@ -23,3 +26,5 @@ service:
 resources:
   db:
     type: postgres
+  data:
+    type: volume

@@ -29,8 +29,7 @@ entity:
         # pod_template instead.
         image: ghcr.io/humanitec/cloudrun-container-runner:latest
         service_account: humanitec-runner
-        # Must not collide with an existing directory in the Runner image.
-        shared_directory: /humanitec
+        shared_directory: /home/my-user/workspace
         namespace: humanitec-runner
 
         variables:
@@ -41,16 +40,8 @@ entity:
           # Only the path to the key, never the key itself. Relative, so it
           # resolves inside shared_directory once the entrypoint cd's there.
           GOOGLE_APPLICATION_CREDENTIALS: credentials.json
-
-      # Application payload. The Driver serialises the whole `values` object
-      # into RESOURCE_INPUTS_FILE, which is what score2cloudrun reads. Keys the
-      # Runner does not recognise are ignored.
-      service: ${context.app.id}-${context.env.id}
-
-      scaling:
-        min_instances: 0
-        max_instances: 10
-      allow_unauthenticated: true
+          # The identity the deployed service runs as.
+          CLOUDRUN_RUNTIME_SERVICE_ACCOUNT: cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com
 
     secret_refs:
       # The service account key itself. The Operator reads it from your secret
@@ -62,4 +53,4 @@ entity:
           ref: gcp/cloudrun-deployer-key
 
   criteria:
-    - class: default
+    - class: cloud-run

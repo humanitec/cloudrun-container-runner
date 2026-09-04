@@ -41,11 +41,15 @@
 
 set -euo pipefail
 
-log() { printf '[runner] %s\n' "$*" >&2; }
+# Where score2cloudrun writes the Cloud Run manifest and gcloud reads it back.
+readonly MANIFEST_FILE=service.yaml
+
+log() { printf '[runner] %s\n' "$*"; }
+err() { printf '[runner] %s\n' "$*" >&2; }
 
 # die records the reason in ERROR_FILE, where the Orchestrator picks it up, and fails the Job.
 die() {
-  log "ERROR: $*"
+  err "ERROR: $*"
   printf '%s\n' "$*" >>"${ERROR_FILE:-/dev/null}"
   exit 1
 }
@@ -63,9 +67,11 @@ run() {
 
   # `|| rc=` keeps set -e from aborting before the failure can be reported.
   output="$("$@" 2>&1)" || rc=$?
-  printf '%s\n' "${output}" >&2
-
   ((rc == 0)) || die "$(printf '%s failed with exit code %d:\n%s' "$*" "${rc}" "${output}")"
+
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}"
+  fi
 }
 
 write_json() {
@@ -95,7 +101,7 @@ create() {
 
   log "deploying ${service} to Cloud Run"
   # Synchronous call, waits for service's Ready condition
-  run gcloud run services replace service.yaml --quiet
+  run gcloud run services replace "${MANIFEST_FILE}" --quiet
 
   local described
   described="$(gcloud run services describe "${service}" --format=json)" ||
@@ -147,11 +153,10 @@ main() {
   authenticate
 
   log "converting the Score workload into a Cloud Run service manifest"
-  score2cloudrun "${RESOURCE_INPUTS_FILE}" >service.yaml ||
-    die "score2cloudrun could not convert the Score workload into a Cloud Run service"
+  run score2cloudrun -output "${MANIFEST_FILE}" "${RESOURCE_INPUTS_FILE}"
 
   local service
-  service="$(yq '.metadata.name // ""' service.yaml)"
+  service="$(yq '.metadata.name // ""' "${MANIFEST_FILE}")"
   [[ -n "${service}" ]] || die "the generated manifest has no metadata.name"
 
   case "${ACTION}" in
