@@ -7,32 +7,61 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
-	"strings"
+	"time"
 
 	"github.com/score-spec/score-go/types"
-	core "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
+	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
-	"github.com/humanitec/cloudrun-container-runner/internal/score"
-	"github.com/humanitec/cloudrun-container-runner/internal/utils"
+	scorecloudrun "github.com/humanitec/cloudrun-container-runner/internal/score/cloudrun"
 )
 
 var version = "dev"
 
 const (
-	CloudRunExtensionName    = "cloudrun"
+	// The Container Driver runs this binary as the runner container of a Kubernetes Job
+	// and talks to it purely through the environment.
+
+	// EnvAction specifies the Driver lifecycle action (create or destroy)
+	EnvAction = "ACTION"
+
+	// EnvResourceInputsFile specifies the resource inputs file.
+	EnvResourceInputsFile = "RESOURCE_INPUTS_FILE"
+
+	// EnvOutputsFile specifies the file where the non-secret outputs are written to.
+	EnvOutputsFile = "OUTPUTS_FILE"
+
+	// EnvSecretOutputsFile specifies the file where the secret outputs are written to. Not used, but reserved for hypothetical use.
+	EnvSecretOutputsFile = "SECRET_OUTPUTS_FILE"
+
+	// EnvErrorFile specifies the file where the error message is written to.
+	EnvErrorFile = "ERROR_FILE"
+
+	// EnvScriptsDirectory specifies the working directory.
+	EnvScriptsDirectory = "SCRIPTS_DIRECTORY"
+
+	// EnvRuntimeServiceAccount names the identity the deployed service runs as,
+	// as opposed to the one this binary deploys with.
 	EnvRuntimeServiceAccount = "CLOUDRUN_RUNTIME_SERVICE_ACCOUNT"
 
-	// defaultOutputPath is where the manifest lands without -output. The
-	// entrypoint names the same file explicitly, so the two stay legible apart.
+	// EnvServiceName is the name of the Cloud Run service.
+	EnvServiceName = "CLOUDRUN_SERVICE_NAME"
+
+	// EnvServiceNamePrefix is the prefix of the Cloud Run service name.
+	EnvServiceNamePrefix = "CLOUDRUN_SERVICE_NAME_PREFIX"
+
+	ActionCreate  = "create"
+	ActionDestroy = "destroy"
+
+	// defaultOutputPath is where the manifest lands without -output.
 	defaultOutputPath = "service.yaml"
+
+	// defaultTimeout bounds the wait for Cloud Run to settle a deployment. A
+	// service that has not come up by then is not going to.
+	defaultTimeout = 10 * time.Minute
 )
 
 type SecretRef struct {
@@ -55,10 +84,6 @@ type ResourceInputs struct {
 	Spec          types.Workload            `json:"spec"`
 	Substitutions map[string]Substitution   `json:"substitutions,omitempty"`
 	Extensions    map[string]map[string]any `json:"extensions,omitempty"`
-}
-
-type WorkloadOutput struct {
-	Manifests []map[string]any
 }
 
 func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
@@ -85,244 +110,8 @@ func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input
 	return out
 }
 
-func fileModeFromString(mode *string) (*int32, error) {
-	if mode == nil {
-		return nil, nil
-	}
-	parsedMode, err := strconv.ParseInt(*mode, 8, 32)
-	if err != nil {
-		return nil, fmt.Errorf("expected octal number, got \"%s\": %w", *mode, err)
-	}
-	return utils.ToPtr(int32(parsedMode)), nil
-}
-
-// applyExtensionToPod applies the extension to the Pod Object.
-func applyExtensionToPod(pod core.Pod, extension map[string]any) (core.Pod, error) {
-	// TODO: implement
-	return pod, nil
-}
-
-// secretSaver stores a secret value under name and returns the version the
-// generated manifest should reference. *secretmanager.Client implements it.
-type secretSaver interface {
-	SaveSecret(ctx context.Context, name, value string) (string, error)
-}
-
-// scoreWorkloadToCloudRunService converts a Score workload into a Cloud Run service manifest.
-// Any secret the workload resolves is written to gsm secrets, and the manifest references its version.
-func scoreWorkloadToCloudRunService(ctx context.Context, in ResourceInputs, serviceAccount string, secrets secretSaver) (WorkloadOutput, error) {
-	workloadName := in.Id
-	workload := in.Spec
-	var converter score.K8sScoreConverter
-	converter = score.K8sScoreConverter{
-		WorkloadResource: score.WorkloadResource{
-			Workload:      &workload,
-			Substitutions: substitutionsToInputs(in.Substitutions),
-			Name:          workloadName,
-		},
-		EnvVarOverride: func(containerName string) ([]core.EnvVar, error) {
-			envVars := make([]core.EnvVar, 0)
-			for name, value := range workload.Containers[containerName].Variables {
-				placeholders := score.GetAllPlaceholdersInString(value)
-
-				placeholderStrs := map[string]string{}
-				isSecret := false
-				for _, placeholder := range placeholders {
-					output, err := converter.OutputForPlaceholder(placeholder, containerName)
-					if err != nil {
-						return nil, err
-					}
-					if output.Secret != nil {
-						if output.Secret.Value == nil {
-							// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
-							// In the future we may need to support secret references, that reference Google Secret Manager secrets.
-							return nil, fmt.Errorf("secret with name %s: secret references are not supported: require secret value to be provided", name)
-						}
-						isSecret = true
-						str, err := utils.DecodeToString(output.Secret.Value)
-						if err != nil {
-							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-						}
-						placeholderStrs[placeholder] = str
-					} else if output.Value != nil {
-						str, err := utils.DecodeToString(output.Value)
-						if err != nil {
-							return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-						}
-						placeholderStrs[placeholder] = str
-					}
-				}
-				replacedVal, err := score.ReplaceAllPlaceholdersInString(value, placeholderStrs)
-				if err != nil {
-					return nil, fmt.Errorf("resolving variable %s in container %s: %w", name, containerName, err)
-				}
-				if isSecret {
-					// Save the secret to GSM and add the env var reference
-					secretName := secretmanager.SecretName(workloadName, containerName, "env", name)
-					secretVersion, err := secrets.SaveSecret(ctx, secretName, replacedVal)
-					if err != nil {
-						return nil, fmt.Errorf("resolving variable %s in container %s: saving secret to google secret manager: %w", name, containerName, err)
-					}
-					envVars = append(envVars, core.EnvVar{
-						Name: name,
-						ValueFrom: &core.EnvVarSource{
-							SecretKeyRef: &core.SecretKeySelector{
-								Key: secretVersion,
-								LocalObjectReference: core.LocalObjectReference{
-									Name: secretName,
-								},
-							},
-						},
-					})
-				} else {
-					envVars = append(envVars, core.EnvVar{
-						Name:  name,
-						Value: replacedVal,
-					})
-				}
-			}
-			slices.SortFunc(envVars, func(a, b core.EnvVar) int {
-				return strings.Compare(a.Name, b.Name)
-			})
-			return envVars, nil
-		},
-		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (core.EnvVarSource, error) {
-			return core.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
-		},
-		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (core.Volume, error) {
-			if len(files) > 1 {
-				// See https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations
-				return core.Volume{}, fmt.Errorf("more then one file specified in directory %s: cloudrun only supports mounting 1 file per directory from google secret manager(gsm), got %d (See: https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations)", dir, len(files))
-			}
-			var fileName string
-			for fn := range files {
-				fileName = fn
-			}
-			content, err := workloadRes.ExpandFile(*files[fileName], containerName)
-			if err != nil {
-				return core.Volume{}, err
-			}
-			if content.Secret == nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
-			}
-			if content.Secret.Value == nil {
-				// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
-				// In the future we may need to support secret references, that reference Google Secret Manager secrets.
-				return core.Volume{}, fmt.Errorf("file %s/%s: secret references are not supported: require secret value to be provided", dir, fileName)
-			}
-			fileMode, err := fileModeFromString(files[fileName].Mode)
-			if err != nil {
-				return core.Volume{}, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
-			}
-			// Save the secret to GSM and createVolume spec
-			str, err := utils.DecodeToString(content.Secret.Value)
-			if err != nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
-			}
-			secretName := secretmanager.SecretName(workloadName, containerName, "vol", fileName)
-			secretVersion, err := secrets.SaveSecret(ctx, secretName, str)
-			if err != nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: saving secret to google secret manager: %w", dir, fileName, err)
-			}
-			return core.Volume{
-				VolumeSource: core.VolumeSource{
-					Secret: &core.SecretVolumeSource{
-						SecretName: secretName,
-						Items: []core.KeyToPath{
-							{
-								Key:  secretVersion,
-								Path: fileName,
-								Mode: fileMode,
-							},
-						},
-					},
-				},
-				Name: volumeName,
-			}, nil
-		},
-	}
-	podSpec, err := converter.PodSpec("google-cloud-run")
-	if err != nil {
-		return WorkloadOutput{}, err
-	}
-	pod := core.Pod{
-		ObjectMeta: metav1.ObjectMeta{},
-		Spec:       podSpec,
-	}
-	// The ServiceAccountName field is omitempty, so an empty account leaves the manifest exactly as it was.
-	pod.Spec.ServiceAccountName = serviceAccount
-	if ext := in.Extensions[CloudRunExtensionName]; ext != nil {
-		pod, err = applyExtensionToPod(pod, ext)
-		if err != nil {
-			return WorkloadOutput{}, err
-		}
-	}
-
-	if workload.Service != nil {
-		if len(workload.Service.Ports) > 1 {
-			return WorkloadOutput{}, fmt.Errorf("cloudrun only supports a single port, got %d ports", len(workload.Service.Ports))
-		}
-		containerPorts := make([]core.ContainerPort, 0)
-		for portName, port := range workload.Service.Ports {
-			portNum := int32(port.Port)
-			if port.TargetPort != nil {
-				portNum = int32(*port.TargetPort)
-			}
-			containerPort := core.ContainerPort{
-				ContainerPort: portNum,
-			}
-			if portName == "http1" || portName == "h2c" {
-				containerPort.Name = portName
-			}
-			containerPorts = append(containerPorts, containerPort)
-		}
-		if len(workload.Containers) > 1 {
-			return WorkloadOutput{}, fmt.Errorf("cloudrun only supports ingress on a single container: ambiguous container as there are %d containers", len(workload.Containers))
-		}
-		container := pod.Spec.Containers[0]
-		container.Ports = containerPorts
-		pod.Spec.Containers[0] = container
-	}
-
-	service := servingv1.Service{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "serving.knative.dev/v1",
-			Kind:       "Service",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: workloadName,
-		},
-		Spec: servingv1.ServiceSpec{
-			ConfigurationSpec: servingv1.ConfigurationSpec{
-				Template: servingv1.RevisionTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{},
-					Spec: servingv1.RevisionSpec{
-						PodSpec: pod.Spec,
-					},
-				},
-			},
-			//RouteSpec:         servingv1.RouteSpec{},
-		},
-	}
-	serviceAsMap, err := utils.AsMap(service)
-	if err != nil {
-		return WorkloadOutput{}, fmt.Errorf("unable to marshal knative service manifest: %w", err)
-	}
-	// TODO: apply extensions to Service
-
-	return WorkloadOutput{
-		Manifests: []map[string]any{
-			serviceAsMap,
-		},
-	}, nil
-
-}
-
-// readResourceInputs loads RESOURCE_INPUTS_FILE, the JSON the Container Driver
-// writes for the runner, and the entrypoint passes to us as an argument. See
-// examples/resource-inputs.json. Keys the runner does not recognise are
-// ignored; the deployment target is not in here at all, it reaches gcloud
-// through CLOUDSDK_CORE_PROJECT and CLOUDSDK_RUN_REGION.
+// readResourceInputs loads the resource inputs (JSON) the Container Driver writes for the runner.
+// See examples/resource-inputs.json. Unknown keys are ignored.
 func readResourceInputs(path string) (ResourceInputs, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -337,9 +126,7 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 	if in.Id == "" {
 		return ResourceInputs{}, fmt.Errorf("resource inputs %s: \"id\" is required, it names the Cloud Run service to deploy", path)
 	}
-	// scoreWorkloadToCloudRunService indexes the first container once the
-	// workload exposes a service, so catch an empty workload here, where we can
-	// say something useful about it.
+	// Empty workloads are not allowed, catch it right away.
 	if len(in.Spec.Containers) == 0 {
 		return ResourceInputs{}, fmt.Errorf("resource inputs %s: \"spec.containers\" is empty, a Cloud Run service needs at least one container", path)
 	}
@@ -347,25 +134,23 @@ func readResourceInputs(path string) (ResourceInputs, error) {
 	return in, nil
 }
 
-func main() {
-	if err := run(context.Background()); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
-		os.Exit(1)
+func getServiceName(workloadName string) string {
+	if name := os.Getenv(EnvServiceName); name != "" {
+		return name
 	}
+	if prefix := os.Getenv(EnvServiceNamePrefix); prefix != "" {
+		return prefix + "-" + workloadName
+	}
+	return workloadName
 }
 
-// run converts the Score workload named on the command line into a Cloud Run
-// service manifest, written as YAML to the file named by -output.
 func run(ctx context.Context) error {
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	outputPath := flag.String("output", defaultOutputPath, "file to write the service manifest to")
-	flag.Usage = func() {
-		out := flag.CommandLine.Output()
-		_, _ = fmt.Fprintf(out, "Usage: %s [flags] RESOURCE_INPUTS_FILE\n\n", filepath.Base(os.Args[0]))
-		_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
-			"service manifest, written as YAML to the file named by -output.\n\nFlags:\n")
-		flag.PrintDefaults()
-	}
+	deploy := flag.Bool("deploy", false, "apply the manifest to Cloud Run rather than only writing it")
+	action := flag.String("action", envOr(EnvAction, ActionCreate), "with -deploy, either \"create\" or \"destroy\"")
+	timeout := flag.Duration("timeout", defaultTimeout, "how long to wait for Cloud Run to settle the deployment")
+	flag.Usage = usage
 	flag.Parse()
 
 	if *printVersion {
@@ -373,42 +158,160 @@ func run(ctx context.Context) error {
 		return nil
 	}
 
-	if flag.NArg() != 1 {
+	inputsPath := os.Getenv(EnvResourceInputsFile)
+	switch flag.NArg() {
+	case 0:
+		if inputsPath == "" {
+			flag.Usage()
+			return fmt.Errorf("no resource inputs file: pass one as an argument or set %s", EnvResourceInputsFile)
+		}
+	case 1:
+		inputsPath = flag.Arg(0)
+	default:
 		flag.Usage()
-		return fmt.Errorf("expected one argument, the resource inputs file, got %d", flag.NArg())
+		return fmt.Errorf("expected at most one argument, the resource inputs file, got %d", flag.NArg())
 	}
 
-	in, err := readResourceInputs(flag.Arg(0))
+	if *action != ActionCreate && *action != ActionDestroy {
+		return fmt.Errorf("unsupported -action %q, expected %q or %q", *action, ActionCreate, ActionDestroy)
+	}
+	if *action == ActionDestroy && !*deploy {
+		return fmt.Errorf("-action %s needs -deploy: there is nothing to do for a destroy unless the deployment happens", ActionDestroy)
+	}
+
+	// The Driver expects the runner to work inside the shared directory (the output files, the error file, the credentials file).
+	if dir := os.Getenv(EnvScriptsDirectory); dir != "" {
+		if err := os.Chdir(dir); err != nil {
+			return fmt.Errorf("entering the working directory %s: %w", dir, err)
+		}
+	}
+
+	in, err := readResourceInputs(inputsPath)
 	if err != nil {
 		return err
 	}
 
-	serviceAccount := os.Getenv(EnvRuntimeServiceAccount)
+	target := google.TargetFromEnv()
+	if !*deploy {
+		return create(ctx, in, target, *outputPath, false)
+	}
 
-	secrets := secretmanager.New(google.TargetFromEnv())
+	// Everything past here waits on Cloud Run, so it is bounded.
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+
+	if *action == ActionDestroy {
+		return destroy(ctx, target, getServiceName(in.Id))
+	}
+	return create(ctx, in, target, *outputPath, true)
+}
+
+// create converts the workload into a service manifest, writes it to
+// outputPath, and when deploy is set applies it to Cloud Run.
+func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
+	serviceName := getServiceName(in.Id)
+	secrets := secretmanager.New(target, serviceName)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
 		}
 	}()
 
-	out, err := scoreWorkloadToCloudRunService(ctx, in, serviceAccount, secrets)
+	manifest, err := scorecloudrun.FromScoreWorkload(ctx, scorecloudrun.Options{
+		Name:           serviceName,
+		Workload:       &in.Spec,
+		Substitutions:  substitutionsToInputs(in.Substitutions),
+		Extension:      in.Extensions[scorecloudrun.ExtensionName],
+		ServiceAccount: os.Getenv(EnvRuntimeServiceAccount),
+	}, secrets)
 	if err != nil {
 		return fmt.Errorf("converting the Score workload into a Cloud Run service: %w", err)
 	}
 
-	// The entrypoint reads .metadata.name off the whole file and feeds it to
-	// `gcloud run services replace`, so exactly one document has to come out.
-	if len(out.Manifests) != 1 {
-		return fmt.Errorf("expected exactly one manifest, got %d", len(out.Manifests))
-	}
-
-	manifest, err := yaml.Marshal(out.Manifests[0])
-	if err != nil {
+	if b, err := yaml.Marshal(manifest); err != nil {
 		return fmt.Errorf("serialising the service manifest: %w", err)
-	}
-	if err := os.WriteFile(*outputPath, manifest, 0o600); err != nil {
+	} else if err = os.WriteFile(outputPath, b, 0o600); err != nil {
 		return fmt.Errorf("writing the service manifest: %w", err)
 	}
+	if !deploy {
+		return nil
+	}
+
+	result, err := cloudrun.New(target).Deploy(ctx, manifest)
+	if err != nil {
+		return err
+	}
+
+	if err := secrets.DeleteUnused(ctx); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: cleaning up the secrets the workload no longer references: %v\n", err)
+	}
+
+	if err := writeJSON(os.Getenv(EnvOutputsFile), result); err != nil {
+		return fmt.Errorf("writing the deployment outputs: %w", err)
+	}
 	return nil
+}
+
+// destroy deletes the Cloud Run service the workload deployed to and deletes related secrets.
+func destroy(ctx context.Context, target google.Target, service string) error {
+	if err := cloudrun.New(target).Delete(ctx, service); err != nil {
+		return err
+	}
+
+	secrets := secretmanager.New(target, service)
+	defer func() {
+		if err := secrets.Close(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
+		}
+	}()
+
+	if err := secrets.DeleteUnused(ctx); err != nil {
+		return fmt.Errorf("deleting the secrets of service %s: %w", service, err)
+	}
+	return nil
+}
+
+func usage() {
+	out := flag.CommandLine.Output()
+	_, _ = fmt.Fprintf(out, "Usage: %s [flags] [RESOURCE_INPUTS_FILE]\n\n", filepath.Base(os.Args[0]))
+	_, _ = fmt.Fprint(out, "Converts the Score workload in RESOURCE_INPUTS_FILE into a Cloud Run\n"+
+		"service manifest, written as YAML to the file named by -output. With\n"+
+		"-deploy the manifest is applied to Cloud Run as well.\n\n"+
+		"RESOURCE_INPUTS_FILE defaults to $"+EnvResourceInputsFile+".\n\nFlags:\n")
+	flag.PrintDefaults()
+	_, _ = fmt.Fprint(out, "\nEnvironment:\n"+
+		"  "+google.EnvProject+"\n\tthe Google Cloud project to deploy into\n"+
+		"  "+google.EnvRegion+"\n\tthe Cloud Run region to deploy into\n"+
+		"  "+EnvRuntimeServiceAccount+"\n\tthe identity the deployed service runs as\n"+
+		"  GOOGLE_APPLICATION_CREDENTIALS\n\ta service account key or external account configuration;\n"+
+		"\twithout one the credentials come from the metadata server\n"+
+		"  "+EnvScriptsDirectory+"\n\tworking directory to enter first, which every other\n"+
+		"\trelative path resolves against\n"+
+		"  "+EnvAction+", "+EnvOutputsFile+", "+EnvSecretOutputsFile+", "+EnvErrorFile+"\n"+
+		"\tthe Container Driver's side of the contract\n")
+}
+
+// reportError appends reason to ERROR_FILE.
+func reportError(reason error) {
+	path := os.Getenv(EnvErrorFile)
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: opening %s: %v\n", path, err)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := fmt.Fprintln(f, reason); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: writing %s: %v\n", path, err)
+	}
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: %v\n", err)
+		reportError(err)
+		os.Exit(1)
+	}
 }

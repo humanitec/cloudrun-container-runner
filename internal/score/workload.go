@@ -256,10 +256,10 @@ func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName strin
 	}
 }
 
-// ExpandFile returns the a inputs.Input that can be used as the value of
+// ExpandFile returns the inputs.Input that can be used as the value of
 // the file
 //
-// Currnetly, scecret templating is not supported except where raw secrets are
+// Currnetly, secret templating is not supported except where raw secrets are
 // used, so in those cases, unless the secret is on its own in the file, an
 // error will be returned.
 func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName string) (inputs.Input, error) {
