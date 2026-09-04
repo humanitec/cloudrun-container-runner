@@ -15,12 +15,12 @@ ARG VERSION=0.0.0
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH}" \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -o /out/score2cloudrun ./cmd/score2cloudrun
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/score2cloudrun ./cmd/score2cloudrun
 
 # --- runtime stage -----------------------------------------------------------
 FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:580.0.0-alpine
 
-RUN apk add --no-cache jq
+RUN apk add --no-cache jq yq
 
 COPY --from=builder /out/score2cloudrun /usr/local/bin/score2cloudrun
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
