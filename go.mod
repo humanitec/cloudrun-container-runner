@@ -8,7 +8,7 @@ require (
 	github.com/score-spec/score-go v1.20.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.287.1
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.1
 	k8s.io/api v0.35.7
 	k8s.io/apimachinery v0.35.7
 	sigs.k8s.io/yaml v1.6.0
