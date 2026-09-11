@@ -531,7 +531,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 					"secretName": "one-secret",
 				},
 			},
-			"google_cloud_run": map[string]any{
+			"google-cloud-run": map[string]any{
 				"secret": map[string]any{
 					"secretName": "one-cloud-run-secret",
 				},
@@ -659,7 +659,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 		assert.ElementsMatch(t, expectedVolumes, actualVolumes)
 	})
 
-	t.Run("one volume google_cloud_run", func(t *testing.T) {
+	t.Run("one volume google-cloud-run", func(t *testing.T) {
 		converter := converterFor(types.WorkloadContainers{
 			"main": types.Container{
 				Volumes: types.ContainerVolumes{
@@ -670,7 +670,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 				},
 			},
 		})
-		_, actualVolumes, err := converter.Volumes("google_cloud_run")
+		_, actualVolumes, err := converter.Volumes("google-cloud-run")
 		require.NoError(t, err)
 
 		expectedVolumes := []core.Volume{
@@ -727,7 +727,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 				},
 			},
 		})
-		actualVolumeMounts, actualVolumes, err := converter.Volumes("google_cloud_run")
+		actualVolumeMounts, actualVolumes, err := converter.Volumes("google-cloud-run")
 		require.NoError(t, err)
 
 		require.Contains(t, actualVolumeMounts, "main")
@@ -846,8 +846,8 @@ func TestK8sVolumesFromScore(t *testing.T) {
 			{
 				name:        "platform is missing from the output",
 				source:      "${resources.vol-02}",
-				platform:    "google_cloud_run",
-				wantErrText: "resolving volume resource resources.vol-02: unable to find platform google_cloud_run in output",
+				platform:    "google-cloud-run",
+				wantErrText: "resolving volume resource resources.vol-02: unable to find platform google-cloud-run in output",
 			},
 			{
 				name:        "output is not an object",
@@ -912,7 +912,7 @@ func TestK8sSpodSpecFromScore(t *testing.T) {
 					"secretName": "one-secret",
 				},
 			},
-			"google_cloud_run": map[string]any{
+			"google-cloud-run": map[string]any{
 				"secret": map[string]any{
 					"secretName": "one-cloud-run-secret",
 				},

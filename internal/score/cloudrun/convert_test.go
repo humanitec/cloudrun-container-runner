@@ -132,7 +132,7 @@ func TestFromScoreWorkload(t *testing.T) {
 	      "secret": false,
 	      "value": {
 	        "kubernetes": {"persistentVolumeClaim": {"claimName": "data"}},
-	        "google_cloud_run": {
+	        "google-cloud-run": {
 	          "csi": {
 	            "driver": "gcsfuse.run.googleapis.com",
 	            "readOnly": true,
@@ -385,7 +385,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			    }
 			  }
 			}`,
-			wantErrText: "resolving volume resource resources.data: unable to find platform google_cloud_run in output",
+			wantErrText: "resolving volume resource resources.data: unable to find platform google-cloud-run in output",
 		},
 		{
 			name: "a volume source is not a placeholder",

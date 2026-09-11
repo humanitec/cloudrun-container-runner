@@ -68,15 +68,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Work out the image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # Adds latest for a stable semver tag only.
+          tags: type=semver,pattern={{version}}
+          flavor: latest=auto
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Matches the ARG in the Dockerfile, which stamps main.version.

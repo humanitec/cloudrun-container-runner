@@ -58,7 +58,7 @@
     "resources.data": {
       "secret": false,
       "value": {
-        "google_cloud_run": {
+        "google-cloud-run": {
           "name": "my-gcs-volume",
           "gcs": {
             "bucket": "my-bucket-name",
