@@ -192,7 +192,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 			}, nil
 		},
 	}
-	podSpec, err := converter.PodSpec("google-cloud-run")
+	podSpec, err := converter.PodSpec("google_cloud_run")
 	if err != nil {
 		return nil, err
 	}

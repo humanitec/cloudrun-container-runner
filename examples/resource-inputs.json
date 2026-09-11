@@ -39,6 +39,9 @@
     "resources": {
       "db": {
         "type": "postgres"
+      },
+      "data": {
+        "type": "volume"
       }
     }
   },
@@ -50,6 +53,18 @@
         "store": "gsm",
         "ref": "projects/1234567890/secrets/hello-world-db-uri",
         "version": "3"
+      }
+    },
+    "resources.data": {
+      "secret": false,
+      "value": {
+        "google_cloud_run": {
+          "name": "my-gcs-volume",
+          "gcs": {
+            "bucket": "my-bucket-name",
+            "readOnly": false
+          }
+        }
       }
     }
   },
