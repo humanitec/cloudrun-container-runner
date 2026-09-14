@@ -112,16 +112,35 @@ func TestFromScoreWorkload(t *testing.T) {
 	          "DB_PASSWORD": "${resources.db.password}",
 	          "DB_URL": "postgres://${resources.db.password}@${resources.db.host}/db"
             },
+	        "volumes": {
+	          "/app/backend/data": {"source": "${resources.data}", "path": "sub/dir", "readOnly": true}
+	        },
 	        "files": {
 	          "/etc/app/config.yaml": {"content": "${resources.db.password}", "mode": "0400"}
 	        }
 	      }
 	    },
-	    "resources": {"db": {"type": "postgres"}}
+	    "resources": {
+          "db": {"type": "postgres"},
+          "data": {"type": "volume"}
+        }
 	  },
 	  "substitutions": {
         "resources.db.password": {"secret": true, "value": "s3cr3t"},
-        "resources.db.host": {"secret": false, "value": "db.example.com"}
+        "resources.db.host": {"secret": false, "value": "db.example.com"},
+        "resources.data": {
+	      "secret": false,
+	      "value": {
+	        "kubernetes": {"persistentVolumeClaim": {"claimName": "data"}},
+	        "google-cloud-run": {
+	          "csi": {
+	            "driver": "gcsfuse.run.googleapis.com",
+	            "readOnly": true,
+	            "volumeAttributes": {"bucketName": "my-bucket-name"}
+	          }
+	        }
+	      }
+	    }
       }
 	}`
 	service, err := FromScoreWorkload(t.Context(), optionsFrom(t, inputsJSON, serviceAccount), saver)
@@ -156,19 +175,32 @@ func TestFromScoreWorkload(t *testing.T) {
 
 	// Check volumes and mounts
 	volumes := service.Spec.Template.Spec.Volumes
-	require.Len(t, volumes, 1)
+	require.Len(t, volumes, 2)
+	mounts := service.Spec.Template.Spec.Containers[0].VolumeMounts
+	require.Len(t, mounts, 2)
+
+	// From `files`
 	require.NotNil(t, volumes[0].Secret)
 	assert.Equal(t, wantNameFile, volumes[0].Secret.SecretName)
-
 	require.Len(t, volumes[0].Secret.Items, 1)
 	assert.Equal(t, "7", volumes[0].Secret.Items[0].Key, "the manifest pins the version that was just written")
 	assert.Equal(t, "config.yaml", volumes[0].Secret.Items[0].Path)
 	assert.Equal(t, int64(0o400), volumes[0].Secret.Items[0].Mode)
 
-	mounts := service.Spec.Template.Spec.Containers[0].VolumeMounts
-	require.Len(t, mounts, 1)
 	assert.Equal(t, "/etc/app", mounts[0].MountPath)
 	assert.Equal(t, volumes[0].Name, mounts[0].Name)
+
+	// // From `volumes`
+	require.NotNil(t, volumes[1].Csi)
+	assert.Equal(t, "resources-data", volumes[1].Name)
+	assert.Equal(t, "gcsfuse.run.googleapis.com", volumes[1].Csi.Driver)
+	assert.True(t, volumes[1].Csi.ReadOnly)
+	assert.Equal(t, map[string]string{"bucketName": "my-bucket-name"}, volumes[1].Csi.VolumeAttributes)
+
+	assert.Equal(t, "resources-data", mounts[1].Name)
+	assert.Equal(t, "/app/backend/data", mounts[1].MountPath)
+	assert.Equal(t, "sub/dir", mounts[1].SubPath)
+	assert.True(t, mounts[1].ReadOnly)
 
 	// Check stored secrets
 	assert.Equal(t, map[string]string{
@@ -330,6 +362,83 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  }
 			}`,
 			wantErrText: "file /etc/app/config.yaml: cloudrun only supports mounting files from google secret manager secrets (gsm)",
+		},
+		{
+			name: "a volume has no cloud run spec",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "volumes": {"/app/data": {"source": "${resources.data}"}}
+			      }
+			    },
+			    "resources": {"data": {"type": "volume"}}
+			  },
+			  "substitutions": {
+			    "resources.data": {
+			      "secret": false,
+			      "value": {"kubernetes": {"persistentVolumeClaim": {"claimName": "data"}}}
+			    }
+			  }
+			}`,
+			wantErrText: "resolving volume resource resources.data: unable to find platform google-cloud-run in output",
+		},
+		{
+			name: "a volume source is not a placeholder",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "volumes": {"/app/data": {"source": "my-bucket-name"}}
+			      }
+			    },
+			    "resources": {"data": {"type": "volume"}}
+			  }
+			}`,
+			wantErrText: `source must be a placeholder referencing a volume, got "my-bucket-name"`,
+		},
+		{
+			name: "a volume references a resource that is not a volume",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "volumes": {"/app/data": {"source": "${resources.db}"}}
+			      }
+			    },
+			    "resources": {"db": {"type": "postgres"}}
+			  }
+			}`,
+			wantErrText: "placeholder ${resources.db} in source is not of type volume, got postgres",
+		},
+		{
+			name: "a volume references an undeclared resource",
+			inputsJSON: `{
+			  "id": "hello-world-dev",
+			  "spec": {
+			    "apiVersion": "score.dev/v1b1",
+			    "metadata": {"name": "hello-world"},
+			    "containers": {
+			      "main": {
+			        "image": "busybox:latest",
+			        "volumes": {"/app/data": {"source": "${resources.data}"}}
+			      }
+			    }
+			  }
+			}`,
+			wantErrText: "placeholder ${resources.data} cannot be resolved: no resource with name data",
 		},
 		{
 			name: "the service has two ports",

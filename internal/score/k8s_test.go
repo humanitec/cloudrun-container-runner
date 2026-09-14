@@ -524,37 +524,38 @@ func TestK8sFilesFromScore(t *testing.T) {
 }
 
 func TestK8sVolumesFromScore(t *testing.T) {
-	// Volume resolution in K8sScoreConverter.Volumes is commented out pending
-	// the volume placeholder substitution TODO there, so Volumes currently
-	// returns no volumes, no mounts and no errors. These expectations still
-	// describe the intended behaviour: unskip them when that code comes back.
-	t.Skip("volume resolution disabled: see the TODO in K8sScoreConverter.Volumes")
-
-	params := map[string]inputs.Input{
-		"resources.db.name":     {Value: "db_name"},
-		"resources.db.port":     {Value: 5432},
-		"resources.db.host":     {Value: "db.example.com"},
-		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &inputs.SecretInput{
+	substitutions := map[string]inputs.Input{
+		"resources.vol-01": {Value: map[string]any{
+			"kubernetes": map[string]any{
+				"secret": map[string]any{
+					"secretName": "one-secret",
+				},
+			},
+			"google-cloud-run": map[string]any{
+				"secret": map[string]any{
+					"secretName": "one-cloud-run-secret",
+				},
+			},
+		}},
+		"resources.vol-02": {Value: map[string]any{
+			"kubernetes": map[string]any{
+				"secret": map[string]any{
+					"secretName": "two-secret",
+				},
+			},
+		}},
+		"resources.not-an-object": {Value: "just a string"},
+		"resources.platform-not-an-object": {Value: map[string]any{
+			"kubernetes": "just a string",
+		}},
+		"resources.not-a-volume-spec": {Value: map[string]any{
+			"kubernetes": map[string]any{
+				"secret": "should be an object",
+			},
+		}},
+		"resources.secret-volume": {Secret: &inputs.SecretInput{
 			Store: "secret",
-			Key:   "mysecret/mypassword",
-		}},
-
-		"resources.vol-01.k8s": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "one-secret",
-			},
-		}},
-		"resources.vol-01.google-cloud-run": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "one-cloud-run-secret",
-			},
-		}},
-
-		"resources.vol-02.k8s": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "two-secret",
-			},
+			Key:   "mysecret/myvolume",
 		}},
 	}
 	workloadName := "workloads.test"
@@ -575,73 +576,75 @@ func TestK8sVolumesFromScore(t *testing.T) {
 		"missing": types.Resource{
 			Type: "volume",
 		},
+		"not-an-object": types.Resource{
+			Type: "volume",
+		},
+		"platform-not-an-object": types.Resource{
+			Type: "volume",
+		},
+		"not-a-volume-spec": types.Resource{
+			Type: "volume",
+		},
+		"secret-volume": types.Resource{
+			Type: "volume",
+		},
+	}
+
+	// converterFor builds a converter over a workload with the given containers.
+	converterFor := func(containers types.WorkloadContainers) K8sScoreConverter {
+		return K8sScoreConverter{
+			WorkloadResource: WorkloadResource{
+				Workload: &types.Workload{
+					Containers: containers,
+					Resources:  workloadResources,
+				},
+				Name:          workloadName,
+				Substitutions: substitutions,
+			},
+		}
 	}
 
 	t.Run("no volumes", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Variables: types.ContainerVariables{
-						"MESSAGE": "Hello World!",
-					},
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Variables: types.ContainerVariables{
+					"MESSAGE": "Hello World!",
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
-			},
-		}
-		actualVolumeMounts, actualVolumes, err := converter.Volumes("k8s")
+		})
+		actualVolumeMounts, actualVolumes, err := converter.Volumes("kubernetes")
 		require.NoError(t, err)
 		assert.Empty(t, actualVolumeMounts)
 		assert.Empty(t, actualVolumes)
 	})
 
-	t.Run("one volume k8s", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Variables: types.ContainerVariables{
-						"MESSAGE": "Hello World!",
-					},
-					Volumes: types.ContainerVolumes{
-						"/hello/world": types.ContainerVolume{
-							Path:   ptrStr("new"),
-							Source: "${resources.vol-01}",
-						},
+	t.Run("one volume kubernetes", func(t *testing.T) {
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/hello/world": types.ContainerVolume{
+						Path:   ptrStr("new"),
+						Source: "${resources.vol-01}",
 					},
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
-			},
-		}
-		actualVolumeMounts, actualVolumes, err := converter.Volumes("k8s")
+		})
+		actualVolumeMounts, actualVolumes, err := converter.Volumes("kubernetes")
 		require.NoError(t, err)
-		expectedVolumeMounts := map[string][]core.VolumeMount{
-			"main": {
-				{
-					Name:              "resources-vol-01",
-					MountPath:         "/hello/world",
-					ReadOnly:          false,
-					RecursiveReadOnly: nil,
-					SubPath:           "new",
-					MountPropagation:  nil,
-					SubPathExpr:       "",
-				},
+
+		expectedVolumeMounts := []core.VolumeMount{
+			{
+				Name:              "resources-vol-01",
+				MountPath:         "/hello/world",
+				ReadOnly:          false,
+				RecursiveReadOnly: nil,
+				SubPath:           "new",
+				MountPropagation:  nil,
+				SubPathExpr:       "",
 			},
 		}
 		require.Contains(t, actualVolumeMounts, "main")
-		assert.ElementsMatch(t, expectedVolumeMounts["main"], actualVolumeMounts["main"])
+		assert.ElementsMatch(t, expectedVolumeMounts, actualVolumeMounts["main"])
 
 		expectedVolumes := []core.Volume{
 			{
@@ -656,54 +659,19 @@ func TestK8sVolumesFromScore(t *testing.T) {
 		assert.ElementsMatch(t, expectedVolumes, actualVolumes)
 	})
 
-	t.Run("one volume 2 containers cloud-run", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Variables: types.ContainerVariables{
-						"MESSAGE": "Hello World!",
-					},
-					Volumes: types.ContainerVolumes{
-						"/hello/world": types.ContainerVolume{
-							Path:   ptrStr("new"),
-							Source: "${resources.vol-01}",
-						},
-					},
-				},
-				"other": types.Container{
-					Variables: types.ContainerVariables{
-						"MESSAGE": "Hello World!",
-					},
-					Volumes: types.ContainerVolumes{
-						"other": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "${resources.vol-01}",
-						},
+	t.Run("one volume google-cloud-run", func(t *testing.T) {
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/hello/world": types.ContainerVolume{
+						Path:   ptrStr("new"),
+						Source: "${resources.vol-01}",
 					},
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
-			},
-		}
-		actualVolumeMounts, actualVolumes, err := converter.Volumes("google-cloud-run")
+		})
+		_, actualVolumes, err := converter.Volumes("google-cloud-run")
 		require.NoError(t, err)
-		expectedVolumeMounts := map[string][]core.VolumeMount{
-			"main": {
-				{
-					Name:      "resources-vol-01",
-					MountPath: "/hello/world",
-					SubPath:   "new",
-				},
-			},
-		}
-		require.Contains(t, actualVolumeMounts, "main")
-		assert.ElementsMatch(t, expectedVolumeMounts["main"], actualVolumeMounts["main"])
 
 		expectedVolumes := []core.Volume{
 			{
@@ -717,134 +685,213 @@ func TestK8sVolumesFromScore(t *testing.T) {
 		}
 		assert.ElementsMatch(t, expectedVolumes, actualVolumes)
 	})
-	t.Run("invalid placeholder", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Volumes: types.ContainerVolumes{
-						"new": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "${resources.vol-01.k8s}",
-						},
+
+	t.Run("read only volume", func(t *testing.T) {
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/hello/world": types.ContainerVolume{
+						Source:   "${resources.vol-01}",
+						ReadOnly: ptr(true),
 					},
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
-			},
-		}
-		_, _, err := converter.Volumes("google-cloud-run")
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "source must be a placeholder referencing a volume")
+		})
+		actualVolumeMounts, _, err := converter.Volumes("kubernetes")
+		require.NoError(t, err)
+
+		require.Contains(t, actualVolumeMounts, "main")
+		require.Len(t, actualVolumeMounts["main"], 1)
+		mount := actualVolumeMounts["main"][0]
+		assert.True(t, mount.ReadOnly)
+		assert.Empty(t, mount.SubPath)
+		require.NotNil(t, mount.RecursiveReadOnly)
+		assert.Equal(t, core.RecursiveReadOnlyIfPossible, *mount.RecursiveReadOnly)
 	})
 
-	t.Run("placeholder not alone", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Volumes: types.ContainerVolumes{
-						"new": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "Hello ${resources.vol-01.k8s} world",
-						},
+	t.Run("one volume 2 containers", func(t *testing.T) {
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/hello/world": types.ContainerVolume{
+						Path:   ptrStr("new"),
+						Source: "${resources.vol-01}",
 					},
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
+			"other": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/other/dir": types.ContainerVolume{
+						Source: "${resources.vol-01}",
+					},
+				},
+			},
+		})
+		actualVolumeMounts, actualVolumes, err := converter.Volumes("google-cloud-run")
+		require.NoError(t, err)
+
+		require.Contains(t, actualVolumeMounts, "main")
+		assert.ElementsMatch(t, []core.VolumeMount{
+			{
+				Name:      "resources-vol-01",
+				MountPath: "/hello/world",
+				SubPath:   "new",
+			},
+		}, actualVolumeMounts["main"])
+
+		require.Contains(t, actualVolumeMounts, "other")
+		assert.ElementsMatch(t, []core.VolumeMount{
+			{
+				Name:      "resources-vol-01",
+				MountPath: "/other/dir",
+			},
+		}, actualVolumeMounts["other"])
+
+		expectedVolumes := []core.Volume{
+			{
+				Name: "resources-vol-01",
+				VolumeSource: core.VolumeSource{
+					Secret: &core.SecretVolumeSource{
+						SecretName: "one-cloud-run-secret",
+					},
+				},
 			},
 		}
-		_, _, err := converter.Volumes("google-cloud-run")
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "source must be a placeholder referencing a volume")
+		assert.ElementsMatch(t, expectedVolumes, actualVolumes)
 	})
 
-	t.Run("placeholder does not resolve to a volume", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Volumes: types.ContainerVolumes{
-						"new": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "${resources.db}",
-						},
-					},
+	t.Run("two volumes 2 containers", func(t *testing.T) {
+		converter := converterFor(types.WorkloadContainers{
+			"main": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/one": types.ContainerVolume{Source: "${resources.vol-01}"},
+					"/two": types.ContainerVolume{Source: "${resources.vol-02}"},
 				},
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
+			"other": types.Container{
+				Volumes: types.ContainerVolumes{
+					"/two": types.ContainerVolume{Source: "${resources.vol-02}"},
+				},
 			},
-		}
-		_, _, err := converter.Volumes("google-cloud-run")
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "source is not of type volume")
+		})
+		actualVolumeMounts, actualVolumes, err := converter.Volumes("kubernetes")
+		require.NoError(t, err)
+
+		assert.ElementsMatch(t, []core.VolumeMount{
+			{Name: "resources-vol-01", MountPath: "/one"},
+			{Name: "resources-vol-02", MountPath: "/two"},
+		}, actualVolumeMounts["main"])
+		assert.ElementsMatch(t, []core.VolumeMount{
+			{Name: "resources-vol-02", MountPath: "/two"},
+		}, actualVolumeMounts["other"])
+
+		assert.ElementsMatch(t, []core.Volume{
+			{
+				Name: "resources-vol-01",
+				VolumeSource: core.VolumeSource{
+					Secret: &core.SecretVolumeSource{SecretName: "one-secret"},
+				},
+			},
+			{
+				Name: "resources-vol-02",
+				VolumeSource: core.VolumeSource{
+					Secret: &core.SecretVolumeSource{SecretName: "two-secret"},
+				},
+			},
+		}, actualVolumes)
 	})
 
-	t.Run("placeholder does not resolve to a resource", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Volumes: types.ContainerVolumes{
-						"new": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "${resources.missing}",
-						},
-					},
-				},
+	t.Run("errors", func(t *testing.T) {
+		testCases := []struct {
+			name        string
+			source      string
+			platform    string
+			wantErrText string
+		}{
+			{
+				name:        "source is not a placeholder",
+				source:      "vol-01",
+				wantErrText: `source must be a placeholder referencing a volume, got "vol-01"`,
 			},
-			Resources: workloadResources,
-		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
+			{
+				name:        "placeholder is not alone",
+				source:      "Hello ${resources.vol-01} world",
+				wantErrText: "source must be a placeholder referencing a volume",
+			},
+			{
+				name:        "placeholder has too many parts",
+				source:      "${resources.vol-01.k8s}",
+				wantErrText: "i.e. of the form ${resources.NAME} got ${resources.vol-01.k8s}",
+			},
+			{
+				name:        "placeholder is not a resource",
+				source:      "${metadata.name}",
+				wantErrText: "i.e. of the form ${resources.NAME} got ${metadata.name}",
+			},
+			{
+				name:        "resource is not a volume",
+				source:      "${resources.db}",
+				wantErrText: "placeholder ${resources.db} in source is not of type volume, got postgres",
+			},
+			{
+				name:        "resource is not declared",
+				source:      "${resources.nowhere}",
+				wantErrText: "placeholder ${resources.nowhere} cannot be resolved: no resource with name nowhere",
+			},
+			{
+				name:        "resource has no substitution",
+				source:      "${resources.missing}",
+				wantErrText: "resolving volume resource resources.missing: resolving placeholder \"resources.missing\": no substitution found",
+			},
+			{
+				name:        "platform is missing from the output",
+				source:      "${resources.vol-02}",
+				platform:    "google-cloud-run",
+				wantErrText: "resolving volume resource resources.vol-02: unable to find platform google-cloud-run in output",
+			},
+			{
+				name:        "output is not an object",
+				source:      "${resources.not-an-object}",
+				wantErrText: "resolving volume resource resources.not-an-object: invalid output for platform kubernetes, expected object",
+			},
+			{
+				name:        "platform output is not an object",
+				source:      "${resources.platform-not-an-object}",
+				wantErrText: "resolving volume resource resources.platform-not-an-object: unable to find platform kubernetes in output",
+			},
+			{
+				name:        "platform output is not a volume spec",
+				source:      "${resources.not-a-volume-spec}",
+				wantErrText: "resolving volume resource resources.not-a-volume-spec: unable to parse output for platform kubernetes as k8s volume",
+			},
+			{
+				// A volume resource resolves to a spec, never to a secret.
+				name:        "output is a secret",
+				source:      "${resources.secret-volume}",
+				wantErrText: "resolving volume resource resources.secret-volume: invalid output for platform kubernetes, expected object",
 			},
 		}
-		_, _, err := converter.Volumes("google-cloud-run")
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "cannot resolve resource inputs for")
-	})
 
-	t.Run("volume does not support platform", func(t *testing.T) {
-		workload := types.Workload{
-			Containers: types.WorkloadContainers{
-				"main": types.Container{
-					Volumes: types.ContainerVolumes{
-						"new": types.ContainerVolume{
-							Path:   ptrStr("/hello/world"),
-							Source: "${resources.vol-02}",
+		for _, testCase := range testCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				platform := testCase.platform
+				if platform == "" {
+					platform = "kubernetes"
+				}
+				converter := converterFor(types.WorkloadContainers{
+					"main": types.Container{
+						Volumes: types.ContainerVolumes{
+							"/hello/world": types.ContainerVolume{
+								Path:   ptrStr("new"),
+								Source: testCase.source,
+							},
 						},
 					},
-				},
-			},
-			Resources: workloadResources,
+				})
+				_, _, err := converter.Volumes(platform)
+				require.ErrorContains(t, err, testCase.wantErrText)
+			})
 		}
-		converter := K8sScoreConverter{
-			WorkloadResource: WorkloadResource{
-				Workload:      &workload,
-				Name:          workloadName,
-				Substitutions: params,
-			},
-		}
-		_, _, err := converter.Volumes("google-cloud-run")
-		require.Error(t, err)
-		assert.ErrorContains(t, err, "google-cloud-run")
 	})
 }
 
@@ -859,20 +906,24 @@ func TestK8sSpodSpecFromScore(t *testing.T) {
 			Key:   "mysecret/mypassword",
 		}},
 
-		"resources.vol-01.k8s": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "one-secret",
+		"resources.vol-01": {Value: map[string]any{
+			"kubernetes": map[string]any{
+				"secret": map[string]any{
+					"secretName": "one-secret",
+				},
 			},
-		}},
-		"resources.vol-01.google-cloud-run": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "one-cloud-run-secret",
+			"google-cloud-run": map[string]any{
+				"secret": map[string]any{
+					"secretName": "one-cloud-run-secret",
+				},
 			},
 		}},
 
-		"resources.vol-02.k8s": {Value: map[string]any{
-			"secret": map[string]any{
-				"secretName": "two-secret",
+		"resources.vol-02": {Value: map[string]any{
+			"kubernetes": map[string]any{
+				"secret": map[string]any{
+					"secretName": "two-secret",
+				},
 			},
 		}},
 
@@ -927,7 +978,7 @@ func TestK8sSpodSpecFromScore(t *testing.T) {
 			EnvVarSecretResolver:  testEnvVarSecretResolver,
 			ContainerFileResolver: testContainerFileResolver_NoCall(t),
 		}
-		podSpec, err := converter.PodSpec("k8s")
+		podSpec, err := converter.PodSpec("kubernetes")
 		require.NoError(t, err)
 		expectedPodSpec := core.PodSpec{
 			Containers: []core.Container{
@@ -941,10 +992,6 @@ func TestK8sSpodSpecFromScore(t *testing.T) {
 	})
 
 	t.Run("full pod multi container", func(t *testing.T) {
-		// Expects the volumes and volumeMounts that K8sScoreConverter.Volumes
-		// no longer produces. See the skip in TestK8sVolumesFromScore.
-		t.Skip("volume resolution disabled: see the TODO in K8sScoreConverter.Volumes")
-
 		workload := types.Workload{
 			Containers: types.WorkloadContainers{
 				"main": types.Container{
@@ -1034,7 +1081,7 @@ func TestK8sSpodSpecFromScore(t *testing.T) {
 			EnvVarSecretResolver:  testEnvVarSecretResolver,
 			ContainerFileResolver: testContainerFileResolver_RecordVolumes(t, fileVolNames),
 		}
-		podSpec, err := converter.PodSpec("k8s")
+		podSpec, err := converter.PodSpec("kubernetes")
 		require.NoError(t, err)
 
 		expectedPodSpec := core.PodSpec{

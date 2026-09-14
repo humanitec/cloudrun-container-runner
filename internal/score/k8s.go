@@ -18,6 +18,8 @@ import (
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
+const volumeResourceType = "volume"
+
 type K8sScoreConverter struct {
 	WorkloadResource
 	EnvVarSecretResolver  EnvVarSecretResolver
@@ -283,65 +285,65 @@ func (c *K8sScoreConverter) Volumes(platform string) (map[string][]core.VolumeMo
 		if len(container.Volumes) > 0 {
 			volumeMounts[containerName] = []core.VolumeMount{}
 		}
-		// TODO: this should be revisited after adding a volume placeholder substitution to the substitution map
-		//nolint:gocritic // commented-out code, restore it with the TODO above
-		//for mountPath, volume := range container.Volumes {
-		//	placeholders := GetAllPlaceholdersInString(volume.Source)
-		//	if len(placeholders) != 1 || !strings.HasPrefix(volume.Source, "${") || !strings.HasSuffix(volume.Source, "}") {
-		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, got \"%s\"", containerName, mountPath, volume.Source)
-		//	}
-		//	parts := strings.Split(placeholders[0], ".")
-		//	if len(parts) != 2 || parts[0] != "resources" {
-		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, i.e. of the form ${resources.NAME} got ${%s}", containerName, mountPath, placeholders[0])
-		//	}
-		//	if volumeRes, exists := c.Workload.Resources[parts[1]]; exists {
-		//		if volumeRes.Type != "volume" {
-		//			return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} in source is not of type volume, got %s", containerName, mountPath, placeholders[0], volumeRes.Type)
-		//		}
-		//	} else {
-		//		return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} cannot be resolved: no resource with name %s", containerName, mountPath, placeholders[0], parts[1])
-		//	}
-		//
-		//	volName := strings.ReplaceAll(placeholders[0], ".", "-")
-		//
-		//	if _, exists := volumes[volName]; !exists {
-		//		output, err := c.WorkloadResource.OutputForPlaceholder(placeholders[0]+"."+platform, containerName)
-		//		if err != nil {
-		//			return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
-		//		}
-		//		if outputAsMap, ok := output.Value.(map[string]any); !ok {
-		//			return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output)
-		//		} else {
-		//			var k8sVolume core.Volume
-		//			if err := utils.DecodeViaJSON(outputAsMap, &k8sVolume); err != nil {
-		//				return nil, nil, fmt.Errorf("resolving volume resource %s: unable to parse output for platform %s as k8s volume: %w", placeholders[0], platform, err)
-		//			}
-		//			k8sVolume.Name = volName
-		//			volumes[volName] = k8sVolume
-		//		}
-		//	}
-		//	subPath := ""
-		//	if volume.Path != nil {
-		//		subPath = *volume.Path
-		//	}
-		//
-		//	readOnly := false
-		//	var recursiveReadOnlyMode *core.RecursiveReadOnlyMode
-		//	if volume.ReadOnly != nil {
-		//		readOnly = *volume.ReadOnly
-		//		r := core.RecursiveReadOnlyIfPossible
-		//		recursiveReadOnlyMode = &r
-		//	}
-		//	volumeMounts[containerName] = append(volumeMounts[containerName], core.VolumeMount{
-		//		Name:              volName,
-		//		ReadOnly:          readOnly,
-		//		RecursiveReadOnly: recursiveReadOnlyMode,
-		//		MountPath:         mountPath,
-		//		SubPath:           subPath,
-		//		MountPropagation:  nil, // Default ti "None"
-		//		SubPathExpr:       "",  // Mutually exclusive to SubPath
-		//	})
-		//}
+		for mountPath, volume := range container.Volumes {
+			placeholders := GetAllPlaceholdersInString(volume.Source)
+			if len(placeholders) != 1 || !strings.HasPrefix(volume.Source, "${") || !strings.HasSuffix(volume.Source, "}") {
+				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, got \"%s\"", containerName, mountPath, volume.Source)
+			}
+			parts := strings.Split(placeholders[0], ".")
+			if len(parts) != 2 || parts[0] != "resources" {
+				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: source must be a placeholder referencing a volume, i.e. of the form ${resources.NAME} got ${%s}", containerName, mountPath, placeholders[0])
+			}
+			if volumeRes, exists := c.Workload.Resources[parts[1]]; exists {
+				if volumeRes.Type != volumeResourceType {
+					return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} in source is not of type volume, got %s", containerName, mountPath, placeholders[0], volumeRes.Type)
+				}
+			} else {
+				return nil, nil, fmt.Errorf("resolving volume containers.%s.volumes.%s: placeholder ${%s} cannot be resolved: no resource with name %s", containerName, mountPath, placeholders[0], parts[1])
+			}
+
+			volName := strings.ReplaceAll(placeholders[0], ".", "-")
+
+			if _, exists := volumes[volName]; !exists {
+				output, err := c.OutputForPlaceholder(placeholders[0], containerName)
+				if err != nil {
+					return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
+				}
+				if outputAsMap, ok := output.Value.(map[string]any); !ok {
+					return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output)
+				} else if volumeAsMap, ok := outputAsMap[platform].(map[string]any); !ok {
+					return nil, nil, fmt.Errorf("resolving volume resource %s: unable to find platform %s in output", placeholders[0], platform)
+				} else {
+					var k8sVolume core.Volume
+					if err := utils.DecodeViaJSON(volumeAsMap, &k8sVolume); err != nil {
+						return nil, nil, fmt.Errorf("resolving volume resource %s: unable to parse output for platform %s as k8s volume: %w", placeholders[0], platform, err)
+					}
+					k8sVolume.Name = volName
+					volumes[volName] = k8sVolume
+				}
+			}
+			subPath := ""
+			if volume.Path != nil {
+				subPath = *volume.Path
+			}
+
+			readOnly := false
+			var recursiveReadOnlyMode *core.RecursiveReadOnlyMode
+			if volume.ReadOnly != nil {
+				readOnly = *volume.ReadOnly
+				r := core.RecursiveReadOnlyIfPossible
+				recursiveReadOnlyMode = &r
+			}
+			volumeMounts[containerName] = append(volumeMounts[containerName], core.VolumeMount{
+				Name:              volName,
+				ReadOnly:          readOnly,
+				RecursiveReadOnly: recursiveReadOnlyMode,
+				MountPath:         mountPath,
+				SubPath:           subPath,
+				MountPropagation:  nil, // Default ti "None"
+				SubPathExpr:       "",  // Mutually exclusive to SubPath
+			})
+		}
 	}
 	volumesAsSlice := make([]core.Volume, 0, len(volumes))
 	for _, volume := range volumes {
