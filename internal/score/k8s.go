@@ -310,7 +310,7 @@ func (c *K8sScoreConverter) Volumes(platform string) (map[string][]core.VolumeMo
 					return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
 				}
 				if outputAsMap, ok := output.Value.(map[string]any); !ok {
-					return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output)
+					return nil, nil, fmt.Errorf("resolving volume resource %s: invalid output for platform %s, expected object, got %T", placeholders[0], platform, output.Value)
 				} else if volumeAsMap, ok := outputAsMap[platform].(map[string]any); !ok {
 					return nil, nil, fmt.Errorf("resolving volume resource %s: unable to find platform %s in output", placeholders[0], platform)
 				} else {
