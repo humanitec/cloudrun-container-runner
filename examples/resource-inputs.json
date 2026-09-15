@@ -49,20 +49,17 @@
   "substitutions": {
     "resources.db.uri": {
       "secret": true,
-      "ref": {
-        "store": "gsm",
-        "ref": "projects/1234567890/secrets/hello-world-db-uri",
-        "version": "3"
-      }
+      "value": "postgres://user:password@10.0.0.1:5432/hello-world"
     },
     "resources.data": {
       "secret": false,
       "value": {
         "google-cloud-run": {
-          "name": "my-gcs-volume",
-          "gcs": {
-            "bucket": "my-bucket-name",
-            "readOnly": false
+          "csi": {
+            "driver": "gcsfuse.run.googleapis.com",
+            "volumeAttributes": {
+              "bucketName": "my-bucket-name"
+            }
           }
         }
       }

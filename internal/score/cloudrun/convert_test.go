@@ -385,7 +385,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			    }
 			  }
 			}`,
-			wantErrText: "resolving volume resource resources.data: unable to find platform google-cloud-run in output",
+			wantErrText: "resolving volume resource resources.data: platform google-cloud-run does not exist in output or is not an object",
 		},
 		{
 			name: "a volume source is not a placeholder",
