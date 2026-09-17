@@ -847,7 +847,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 				name:        "platform is missing from the output",
 				source:      "${resources.vol-02}",
 				platform:    "google-cloud-run",
-				wantErrText: "resolving volume resource resources.vol-02: unable to find platform google-cloud-run in output",
+				wantErrText: "resolving volume resource resources.vol-02: platform google-cloud-run does not exist in output or is not an object",
 			},
 			{
 				name:        "output is not an object",
@@ -857,7 +857,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 			{
 				name:        "platform output is not an object",
 				source:      "${resources.platform-not-an-object}",
-				wantErrText: "resolving volume resource resources.platform-not-an-object: unable to find platform kubernetes in output",
+				wantErrText: "resolving volume resource resources.platform-not-an-object: platform kubernetes does not exist in output or is not an object",
 			},
 			{
 				name:        "platform output is not a volume spec",
