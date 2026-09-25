@@ -80,10 +80,10 @@ type Substitution struct {
 // ResourceInputs represents driver resource inputs. In this case it should contain Score specification,
 // substitution map for placeholders replacement and Cloud Run specific extension.
 type ResourceInputs struct {
-	Id            string                    `json:"id"`
-	Spec          types.Workload            `json:"spec"`
-	Substitutions map[string]Substitution   `json:"substitutions,omitempty"`
-	Extensions    map[string]map[string]any `json:"extensions,omitempty"`
+	Id            string                  `json:"id"`
+	Spec          types.Workload          `json:"spec"`
+	Substitutions map[string]Substitution `json:"substitutions,omitempty"`
+	Extensions    inputs.Extensions       `json:"extensions,omitempty"`
 }
 
 func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
@@ -221,7 +221,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 		Name:           serviceName,
 		Workload:       &in.Spec,
 		Substitutions:  substitutionsToInputs(in.Substitutions),
-		Extension:      in.Extensions[scorecloudrun.ExtensionName],
+		Extension:      in.Extensions.GoogleCloudRun,
 		ServiceAccount: os.Getenv(EnvRuntimeServiceAccount),
 	}, secrets)
 	if err != nil {

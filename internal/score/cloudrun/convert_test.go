@@ -41,10 +41,10 @@ func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (str
 // converter needs. The converter itself does not know about it, but the
 // fixtures below are easier to read as the JSON that actually arrives.
 type driverInputs struct {
-	Id            string                    `json:"id"`
-	Spec          types.Workload            `json:"spec"`
-	Substitutions map[string]substitution   `json:"substitutions,omitempty"`
-	Extensions    map[string]map[string]any `json:"extensions,omitempty"`
+	Id            string                  `json:"id"`
+	Spec          types.Workload          `json:"spec"`
+	Substitutions map[string]substitution `json:"substitutions,omitempty"`
+	Extensions    inputs.Extensions       `json:"extensions,omitempty"`
 }
 
 // substitution is one resolved placeholder. A secret arrives either as a value
@@ -88,7 +88,7 @@ func optionsFrom(t *testing.T, inputsJSON, serviceAccount string) Options {
 		Name:           in.Id,
 		Workload:       &in.Spec,
 		Substitutions:  substitutions,
-		Extension:      in.Extensions[ExtensionName],
+		Extension:      in.Extensions.GoogleCloudRun,
 		ServiceAccount: serviceAccount,
 	}
 }
@@ -99,6 +99,7 @@ func TestFromScoreWorkload(t *testing.T) {
 	saver := newFakeSecretSaver()
 	saver.version = "7"
 
+	// Note: we use check a simple `extensions` case here, for more sophisticated cases see TestFromScoreWorkload_Extensions.
 	inputsJSON := `{
 	  "id": "hello-world-dev",
 	  "spec": {
@@ -141,6 +142,13 @@ func TestFromScoreWorkload(t *testing.T) {
 	        }
 	      }
 	    }
+      },
+      "extensions": {
+		"google-cloud-run": {
+		  "pod": {
+		    "metadata": {"annotations": {"autoscaling.knative.dev/maxScale": "5"}}
+          }
+        }
       }
 	}`
 	service, err := FromScoreWorkload(t.Context(), optionsFrom(t, inputsJSON, serviceAccount), saver)
@@ -190,7 +198,7 @@ func TestFromScoreWorkload(t *testing.T) {
 	assert.Equal(t, "/etc/app", mounts[0].MountPath)
 	assert.Equal(t, volumes[0].Name, mounts[0].Name)
 
-	// // From `volumes`
+	// From `volumes`
 	require.NotNil(t, volumes[1].Csi)
 	assert.Equal(t, "resources-data", volumes[1].Name)
 	assert.Equal(t, "gcsfuse.run.googleapis.com", volumes[1].Csi.Driver)
@@ -211,6 +219,9 @@ func TestFromScoreWorkload(t *testing.T) {
 
 	// Check service account
 	assert.Equal(t, serviceAccount, service.Spec.Template.Spec.ServiceAccountName)
+
+	// Check pod extension is applied
+	assert.Equal(t, "5", service.Spec.Template.Metadata.Annotations["autoscaling.knative.dev/maxScale"])
 }
 
 func TestFromScoreWorkload_Failures(t *testing.T) {
@@ -491,4 +502,162 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFromScoreWorkload_Extensions(t *testing.T) {
+	const spec = `"spec": {
+	    "apiVersion": "score.dev/v1b1",
+	    "metadata": {"name": "hello-world"},
+	    "containers": {
+	      "main": {"image": "busybox:latest", "variables": {"A": "1"}}
+	    }
+	  }`
+
+	t.Run("no extensions", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`}`, "")
+		require.Nil(t, opts.Extension)
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+		require.Len(t, service.Spec.Template.Spec.Containers, 1)
+		assert.Equal(t, "busybox:latest", service.Spec.Template.Spec.Containers[0].Image)
+	})
+
+	t.Run("kubernetes extensions are ignored", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"kubernetes": {"pod": {"spec": {"serviceAccountName": "k8s-sa"}}}}
+		}`, "")
+		require.Nil(t, opts.Extension)
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+		assert.Empty(t, service.Spec.Template.Spec.ServiceAccountName)
+	})
+
+	t.Run("pod extension", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"pod": {"spec": {
+		    "containers": [{
+		      "name": "main",
+		      "env": [{"name": "B", "value": "2"}],
+		      "resources": {"limits": {"cpu": "2", "memory": "1Gi"}}
+		    }]
+		  }}}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+
+		require.Len(t, service.Spec.Template.Spec.Containers, 1)
+		container := service.Spec.Template.Spec.Containers[0]
+		assert.Equal(t, "busybox:latest", container.Image, "fields the patch does not name are kept")
+		assert.Equal(t, map[string]string{"cpu": "2", "memory": "1Gi"}, container.Resources.Limits)
+
+		envNames := make([]string, 0, len(container.Env))
+		for _, e := range container.Env {
+			envNames = append(envNames, e.Name)
+		}
+		assert.ElementsMatch(t, []string{"A", "B"}, envNames, "env merges by name")
+	})
+
+	t.Run("pod extension metadata lands on the revision template", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"pod": {"metadata": {
+		    "labels": {"team": "platform"},
+		    "annotations": {"autoscaling.knative.dev/maxScale": "5"}
+		  }}}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"team": "platform"}, service.Spec.Template.Metadata.Labels)
+		assert.Equal(t, map[string]string{"autoscaling.knative.dev/maxScale": "5"}, service.Spec.Template.Metadata.Annotations)
+		assert.Empty(t, service.Metadata.Labels, "pod metadata stays off the service")
+	})
+
+	t.Run("pod extension overrides the service account", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"pod": {"spec": {"serviceAccountName": "override@x.iam.gserviceaccount.com"}}}}
+		}`, "runtime@x.iam.gserviceaccount.com")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+		assert.Equal(t, "override@x.iam.gserviceaccount.com", service.Spec.Template.Spec.ServiceAccountName)
+	})
+
+	t.Run("service extension", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"service": {
+		    "metadata": {
+		      "labels": {"team": "platform"},
+		      "annotations": {"run.googleapis.com/ingress": "internal"}
+		    },
+		    "spec": {"template": {
+		      "metadata": {"annotations": {"autoscaling.knative.dev/maxScale": "5"}},
+		      "spec": {"containerConcurrency": 10}
+		    }}
+		  }}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+
+		assert.Equal(t, "hello-world-dev", service.Metadata.Name, "fields the patch does not name are kept")
+		assert.Equal(t, map[string]string{"team": "platform"}, service.Metadata.Labels)
+		assert.Equal(t, map[string]string{"run.googleapis.com/ingress": "internal"}, service.Metadata.Annotations)
+		assert.Equal(t, map[string]string{"autoscaling.knative.dev/maxScale": "5"}, service.Spec.Template.Metadata.Annotations)
+		assert.Equal(t, int64(10), service.Spec.Template.Spec.ContainerConcurrency)
+		require.Len(t, service.Spec.Template.Spec.Containers, 1)
+		assert.Equal(t, "busybox:latest", service.Spec.Template.Spec.Containers[0].Image)
+	})
+
+	t.Run("service extension merges containers by name", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"service": {"spec": {"template": {"spec": {
+		    "containers": [{"name": "main", "env": [{"name": "B", "value": "2"}]}]
+		  }}}}}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+
+		require.Len(t, service.Spec.Template.Spec.Containers, 1)
+		container := service.Spec.Template.Spec.Containers[0]
+		assert.Equal(t, "busybox:latest", container.Image)
+		require.Len(t, container.Env, 2)
+	})
+
+	t.Run("pod and service extensions together", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {
+		    "pod": {"spec": {"serviceAccountName": "override@x.iam.gserviceaccount.com"}},
+		    "service": {"metadata": {"labels": {"team": "platform"}}}
+		  }}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.NoError(t, err)
+		assert.Equal(t, "override@x.iam.gserviceaccount.com", service.Spec.Template.Spec.ServiceAccountName)
+		assert.Equal(t, map[string]string{"team": "platform"}, service.Metadata.Labels)
+	})
+
+	t.Run("invalid pod extension", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"pod": {"spec": "not-an-object"}}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.ErrorContains(t, err, "v1.Pod")
+		assert.Nil(t, service)
+	})
+
+	t.Run("invalid service extension", func(t *testing.T) {
+		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		  "extensions": {"google-cloud-run": {"service": {"spec": "not-an-object"}}}
+		}`, "")
+
+		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		require.ErrorContains(t, err, "unable to unmarshal patched v1.Service")
+		assert.Nil(t, service)
+	})
 }

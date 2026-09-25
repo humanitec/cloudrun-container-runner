@@ -18,7 +18,7 @@ import (
 
 	"github.com/score-spec/score-go/types"
 	runv1 "google.golang.org/api/run/v1"
-	core "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -27,9 +27,6 @@ import (
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
-
-// ExtensionName is the key the Cloud Run extension travels under.
-const ExtensionName = "cloudrun"
 
 // SecretSaver stores a secret value under name and returns the version the
 // generated manifest should reference. *secretmanager.Client implements it.
@@ -49,7 +46,7 @@ type Options struct {
 	Substitutions map[string]inputs.Input
 
 	// Extension is the Cloud Run extension, under ExtensionName.
-	Extension map[string]any
+	Extension *inputs.GoogleCloudRunExtensions
 
 	// ServiceAccount is the identity the deployed service runs as. Empty
 	// leaves it to Cloud Run, which uses the project's default.
@@ -71,8 +68,8 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 			Substitutions: opts.Substitutions,
 			Name:          workloadName,
 		},
-		EnvVarOverride: func(containerName string) ([]core.EnvVar, error) {
-			envVars := make([]core.EnvVar, 0)
+		EnvVarOverride: func(containerName string) ([]corev1.EnvVar, error) {
+			envVars := make([]corev1.EnvVar, 0)
 			for name, value := range workload.Containers[containerName].Variables {
 				placeholders := score.GetAllPlaceholdersInString(value)
 
@@ -114,36 +111,36 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 					if err != nil {
 						return nil, fmt.Errorf("resolving variable %s in container %s: saving secret to google secret manager: %w", name, containerName, err)
 					}
-					envVars = append(envVars, core.EnvVar{
+					envVars = append(envVars, corev1.EnvVar{
 						Name: name,
-						ValueFrom: &core.EnvVarSource{
-							SecretKeyRef: &core.SecretKeySelector{
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
 								Key: secretVersion,
-								LocalObjectReference: core.LocalObjectReference{
+								LocalObjectReference: corev1.LocalObjectReference{
 									Name: secretName,
 								},
 							},
 						},
 					})
 				} else {
-					envVars = append(envVars, core.EnvVar{
+					envVars = append(envVars, corev1.EnvVar{
 						Name:  name,
 						Value: replacedVal,
 					})
 				}
 			}
-			slices.SortFunc(envVars, func(a, b core.EnvVar) int {
+			slices.SortFunc(envVars, func(a, b corev1.EnvVar) int {
 				return strings.Compare(a.Name, b.Name)
 			})
 			return envVars, nil
 		},
-		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (core.EnvVarSource, error) {
-			return core.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
+		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (corev1.EnvVarSource, error) {
+			return corev1.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
 		},
-		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (core.Volume, error) {
+		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (corev1.Volume, error) {
 			if len(files) > 1 {
 				// See https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations
-				return core.Volume{}, fmt.Errorf("more then one file specified in directory %s: cloudrun only supports mounting 1 file per directory from google secret manager(gsm), got %d (See: https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations)", dir, len(files))
+				return corev1.Volume{}, fmt.Errorf("more then one file specified in directory %s: cloudrun only supports mounting 1 file per directory from google secret manager(gsm), got %d (See: https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations)", dir, len(files))
 			}
 			var fileName string
 			for fn := range files {
@@ -151,35 +148,35 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 			}
 			content, err := workloadRes.ExpandFile(*files[fileName], containerName)
 			if err != nil {
-				return core.Volume{}, err
+				return corev1.Volume{}, err
 			}
 			if content.Secret == nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
+				return corev1.Volume{}, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
 			}
 			if content.Secret.Value == nil {
 				// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
 				// In the future we may need to support secret references, that reference Google Secret Manager secrets.
-				return core.Volume{}, fmt.Errorf("file %s/%s: secret references are not supported: require secret value to be provided", dir, fileName)
+				return corev1.Volume{}, fmt.Errorf("file %s/%s: secret references are not supported: require secret value to be provided", dir, fileName)
 			}
 			fileMode, err := fileModeFromString(files[fileName].Mode)
 			if err != nil {
-				return core.Volume{}, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
+				return corev1.Volume{}, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
 			}
 			// Save the secret to GSM and createVolume spec
 			str, err := anyToString(content.Secret.Value)
 			if err != nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
+				return corev1.Volume{}, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
 			}
 			secretName := secretmanager.SecretName(workloadName, containerName, "vol", fileName)
 			secretVersion, err := secrets.SaveSecret(ctx, secretName, str)
 			if err != nil {
-				return core.Volume{}, fmt.Errorf("file %s/%s: saving secret to google secret manager: %w", dir, fileName, err)
+				return corev1.Volume{}, fmt.Errorf("file %s/%s: saving secret to google secret manager: %w", dir, fileName, err)
 			}
-			return core.Volume{
-				VolumeSource: core.VolumeSource{
-					Secret: &core.SecretVolumeSource{
+			return corev1.Volume{
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
 						SecretName: secretName,
-						Items: []core.KeyToPath{
+						Items: []corev1.KeyToPath{
 							{
 								Key:  secretVersion,
 								Path: fileName,
@@ -196,14 +193,14 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 	if err != nil {
 		return nil, err
 	}
-	pod := core.Pod{
+	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{},
 		Spec:       podSpec,
 	}
 	// The ServiceAccountName field is omitempty, so an empty account leaves the manifest exactly as it was.
 	pod.Spec.ServiceAccountName = opts.ServiceAccount
 	if opts.Extension != nil {
-		pod, err = applyExtensionToPod(pod, opts.Extension)
+		pod, err = utils.ApplyPatch(pod, opts.Extension.Pod)
 		if err != nil {
 			return nil, err
 		}
@@ -213,13 +210,13 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		if len(workload.Service.Ports) > 1 {
 			return nil, fmt.Errorf("cloudrun only supports a single port, got %d ports", len(workload.Service.Ports))
 		}
-		containerPorts := make([]core.ContainerPort, 0)
+		containerPorts := make([]corev1.ContainerPort, 0)
 		for portName, port := range workload.Service.Ports {
 			portNum := int32(port.Port)
 			if port.TargetPort != nil {
 				portNum = int32(*port.TargetPort)
 			}
-			containerPort := core.ContainerPort{
+			containerPort := corev1.ContainerPort{
 				ContainerPort: portNum,
 			}
 			if portName == "http1" || portName == "h2c" {
@@ -246,7 +243,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		Spec: servingv1.ServiceSpec{
 			ConfigurationSpec: servingv1.ConfigurationSpec{
 				Template: servingv1.RevisionTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{},
+					ObjectMeta: pod.ObjectMeta,
 					Spec: servingv1.RevisionSpec{
 						PodSpec: pod.Spec,
 					},
@@ -256,7 +253,13 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		},
 	}
 
-	// TODO: apply extensions to Service
+	// Apply extensions to Service
+	if opts.Extension != nil {
+		service, err = utils.ApplyPatch(service, opts.Extension.Service)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// The Knative types and the Cloud Run Admin API (V1) have the same schema, do a JSON round trip to convert.
 	var manifest runv1.Service
@@ -264,12 +267,6 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		return nil, fmt.Errorf("unable to marshal knative service manifest: %w", err)
 	}
 	return &manifest, nil
-}
-
-// applyExtensionToPod applies the extension to the Pod Object.
-func applyExtensionToPod(pod core.Pod, extension map[string]any) (core.Pod, error) {
-	// TODO: implement
-	return pod, nil
 }
 
 func fileModeFromString(mode *string) (*int32, error) {
