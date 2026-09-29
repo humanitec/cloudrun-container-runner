@@ -13,15 +13,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
-func testEnvVarSecretResolver(name string, secret *inputs.SecretInput) (core.EnvVarSource, error) {
+func testEnvVarSecretResolver(name string, secret *SecretRef) (core.EnvVarSource, error) {
 	if secret.Store != "secret" {
 		return core.EnvVarSource{}, fmt.Errorf("not a recognised secret store")
 	}
-	parts := strings.Split(secret.Key, "/")
+	parts := strings.Split(secret.Ref, "/")
 	return core.EnvVarSource{
 		SecretKeyRef: &core.SecretKeySelector{
 			LocalObjectReference: core.LocalObjectReference{
@@ -185,14 +184,14 @@ func TestK8sEnvFromScore(t *testing.T) {
 			},
 		},
 	}
-	params := map[string]inputs.Input{
+	params := map[string]SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &inputs.SecretInput{
+		"resources.db.password": {Secret: &SecretRef{
 			Store: "secret",
-			Key:   "mysecret/mypassword",
+			Ref:   "mysecret/mypassword",
 		}},
 
 		"resources.readonly-store.name": {Value: "read-only bucket"},
@@ -313,14 +312,14 @@ func TestK8sFilesFromScore(t *testing.T) {
 			Type: "cheese",
 		},
 	}
-	params := map[string]inputs.Input{
+	params := map[string]SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &inputs.SecretInput{
+		"resources.db.password": {Secret: &SecretRef{
 			Store: "secret",
-			Key:   "mysecret/mypassword",
+			Ref:   "mysecret/mypassword",
 		}},
 
 		"resources.readonly-store.name": {Value: "read-only bucket"},
@@ -524,7 +523,7 @@ func TestK8sFilesFromScore(t *testing.T) {
 }
 
 func TestK8sVolumesFromScore(t *testing.T) {
-	substitutions := map[string]inputs.Input{
+	substitutions := map[string]SubValue{
 		"resources.vol-01": {Value: map[string]any{
 			"kubernetes": map[string]any{
 				"secret": map[string]any{
@@ -553,9 +552,9 @@ func TestK8sVolumesFromScore(t *testing.T) {
 				"secret": "should be an object",
 			},
 		}},
-		"resources.secret-volume": {Secret: &inputs.SecretInput{
+		"resources.secret-volume": {Secret: &SecretRef{
 			Store: "secret",
-			Key:   "mysecret/myvolume",
+			Ref:   "mysecret/myvolume",
 		}},
 	}
 	workloadName := "workloads.test"
@@ -896,14 +895,14 @@ func TestK8sVolumesFromScore(t *testing.T) {
 }
 
 func TestK8sSpodSpecFromScore(t *testing.T) {
-	params := map[string]inputs.Input{
+	params := map[string]SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &inputs.SecretInput{
+		"resources.db.password": {Secret: &SecretRef{
 			Store: "secret",
-			Key:   "mysecret/mypassword",
+			Ref:   "mysecret/mypassword",
 		}},
 
 		"resources.vol-01": {Value: map[string]any{

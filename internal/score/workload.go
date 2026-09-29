@@ -13,7 +13,6 @@ import (
 
 	"github.com/score-spec/score-go/types"
 
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
@@ -201,7 +200,7 @@ func ReplaceAllPlaceholders(obj any, placeholderStrs map[string]string) (any, er
 
 type WorkloadResource struct {
 	Workload      *types.Workload
-	Substitutions map[string]inputs.Input
+	Substitutions map[string]SubValue
 	Name          string
 }
 
@@ -226,48 +225,48 @@ func placeholderResolveInMap(placeholder []string, m map[string]any) (any, error
 // OutputForPlaceholder resolves the placeholder to either a value or secret.
 //
 // Any issues with resolution results in an error.
-func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName string) (inputs.Input, error) {
+func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName string) (*SubValue, error) {
 	parts := strings.Split(placeholder, ".")
 	if len(parts) < 2 {
-		return inputs.Input{}, fmt.Errorf("invalid placeholder: must have at least 2 parts, got \"%s\"", placeholder)
+		return nil, fmt.Errorf("invalid placeholder: must have at least 2 parts, got \"%s\"", placeholder)
 	}
 	switch parts[0] {
 	case "resources":
 		if sub, exist := w.Substitutions[placeholder]; exist {
-			return sub, nil
+			return &sub, nil
 		}
-		return inputs.Input{}, fmt.Errorf("resolving placeholder \"%s\": no substitution found", placeholder)
+		return nil, fmt.Errorf("resolving placeholder \"%s\": no substitution found", placeholder)
 	case "metadata":
 		val, err := placeholderResolveInMap(parts[1:], w.Workload.Metadata)
 		if err != nil {
-			return inputs.Input{}, fmt.Errorf("resolving placeholder \"%s\": %w", placeholder, err)
+			return nil, fmt.Errorf("resolving placeholder \"%s\": %w", placeholder, err)
 		}
-		return inputs.Input{Value: val}, nil
+		return &SubValue{Value: val}, nil
 	case "container":
 		if container, exists := w.Workload.Containers[containerName]; exists {
 			if parts[1] == "image" {
-				return inputs.Input{Value: container.Image}, nil
+				return &SubValue{Value: container.Image}, nil
 			}
-			return inputs.Input{}, fmt.Errorf("resolving placeholder \"%s\": container can only reference image", placeholder)
+			return nil, fmt.Errorf("resolving placeholder \"%s\": container can only reference image", placeholder)
 		}
-		return inputs.Input{}, fmt.Errorf("resolving placeholder \"%s\": container %s not found", placeholder, containerName)
+		return nil, fmt.Errorf("resolving placeholder \"%s\": container %s not found", placeholder, containerName)
 	default:
-		return inputs.Input{}, fmt.Errorf("invalid placeholder: must start with \"resources\", \"container\" or \"metadata\", got \"%s\"", placeholder)
+		return nil, fmt.Errorf("invalid placeholder: must start with \"resources\", \"container\" or \"metadata\", got \"%s\"", placeholder)
 	}
 }
 
-// ExpandFile returns the inputs.Input that can be used as the value of
+// ExpandFile returns the SubValue that can be used as the value of
 // the file
 //
 // Currnetly, secret templating is not supported except where raw secrets are
 // used, so in those cases, unless the secret is on its own in the file, an
 // error will be returned.
-func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName string) (inputs.Input, error) {
+func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName string) (*SubValue, error) {
 	if file.Content == nil {
-		return inputs.Input{}, fmt.Errorf("content missing")
+		return nil, fmt.Errorf("content missing")
 	}
 	if file.NoExpand != nil && *file.NoExpand {
-		return inputs.Input{Value: *file.Content}, nil
+		return &SubValue{Value: *file.Content}, nil
 	}
 	placeholders := GetAllPlaceholders(*file.Content)
 	placeholderStrs := map[string]string{}
@@ -275,12 +274,12 @@ func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName st
 	for _, placeholder := range placeholders {
 		output, err := w.OutputForPlaceholder(placeholder, containerName)
 		if err != nil {
-			return inputs.Input{}, err
+			return nil, err
 		}
 		if output.Secret != nil {
 			if output.Secret.Value != nil {
 				if placeholderStrs[placeholder], err = utils.DecodeToString(output.Secret.Value); err != nil {
-					return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
+					return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 				}
 				isOutputSecret = true
 			} else {
@@ -288,21 +287,21 @@ func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName st
 				if len(placeholders) == 1 && *file.Content == fmt.Sprintf("${%s}", placeholder) {
 					return output, nil
 				} else {
-					return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: secret of store type %s can only exist on its own in a file", placeholder, output.Secret.Store)
+					return nil, fmt.Errorf("resolving placeholder ${%s}: secret of store type %s can only exist on its own in a file", placeholder, output.Secret.Store)
 				}
 			}
 		} else if output.Value != nil {
 			if placeholderStrs[placeholder], err = utils.DecodeToString(output.Value); err != nil {
-				return inputs.Input{}, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
+				return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 			}
 		}
 	}
 	expandedFile, err := ReplaceAllPlaceholdersInString(*file.Content, placeholderStrs)
 	if err != nil {
-		return inputs.Input{}, err
+		return nil, err
 	}
 	if isOutputSecret {
-		return inputs.Input{Secret: &inputs.SecretInput{Value: expandedFile}}, nil
+		return &SubValue{Secret: &SecretRef{Value: expandedFile, Type: DirectSecretType}}, nil
 	}
-	return inputs.Input{Value: expandedFile}, nil
+	return &SubValue{Value: expandedFile}, nil
 }

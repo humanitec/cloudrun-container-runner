@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
+	"github.com/humanitec/cloudrun-container-runner/internal/score"
 )
 
 // fakeSecretSaver stands in for Google Secret Manager, recording what would be
@@ -41,24 +41,10 @@ func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (str
 // converter needs. The converter itself does not know about it, but the
 // fixtures below are easier to read as the JSON that actually arrives.
 type driverInputs struct {
-	Id            string                  `json:"id"`
-	Spec          types.Workload          `json:"spec"`
-	Substitutions map[string]substitution `json:"substitutions,omitempty"`
-	Extensions    inputs.Extensions       `json:"extensions,omitempty"`
-}
-
-// substitution is one resolved placeholder. A secret arrives either as a value
-// the Operator resolved or as a ref into a store it left alone.
-type substitution struct {
-	Secret bool       `json:"secret"`
-	Value  any        `json:"value,omitempty"`
-	Ref    *secretRef `json:"ref,omitempty"`
-}
-
-type secretRef struct {
-	Store   string `json:"store,omitempty"`
-	Ref     string `json:"ref,omitempty"`
-	Version string `json:"version,omitempty"`
+	Id            string                    `json:"id"`
+	Spec          types.Workload            `json:"spec"`
+	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
+	Extensions    score.Extensions          `json:"extensions,omitempty"`
 }
 
 // optionsFrom turns the Driver's JSON into what FromScoreWorkload takes.
@@ -68,26 +54,10 @@ func optionsFrom(t *testing.T, inputsJSON, serviceAccount string) Options {
 	var in driverInputs
 	require.NoError(t, json.Unmarshal([]byte(inputsJSON), &in))
 
-	substitutions := make(map[string]inputs.Input, len(in.Substitutions))
-	for key, s := range in.Substitutions {
-		switch {
-		case s.Secret && s.Ref != nil:
-			substitutions[key] = inputs.Input{Secret: &inputs.SecretInput{
-				Store:   s.Ref.Store,
-				Key:     s.Ref.Ref,
-				Version: s.Ref.Version,
-			}}
-		case s.Secret:
-			substitutions[key] = inputs.Input{Secret: &inputs.SecretInput{Value: s.Value}}
-		default:
-			substitutions[key] = inputs.Input{Value: s.Value}
-		}
-	}
-
 	return Options{
 		Name:           in.Id,
 		Workload:       &in.Spec,
-		Substitutions:  substitutions,
+		Substitutions:  in.Substitutions,
 		Extension:      in.Extensions.GoogleCloudRun,
 		ServiceAccount: serviceAccount,
 	}
@@ -127,10 +97,9 @@ func TestFromScoreWorkload(t *testing.T) {
         }
 	  },
 	  "substitutions": {
-        "resources.db.password": {"secret": true, "value": "s3cr3t"},
-        "resources.db.host": {"secret": false, "value": "db.example.com"},
+        "resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}},
+        "resources.db.host": {"value": "db.example.com"},
         "resources.data": {
-	      "secret": false,
 	      "value": {
 	        "kubernetes": {"persistentVolumeClaim": {"claimName": "data"}},
 	        "google-cloud-run": {
@@ -262,8 +231,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  },
 			  "substitutions": {
 			    "resources.db.password": {
-			      "secret": true,
-			      "ref": {"store": "gsm", "ref": "projects/1234567890/secrets/db", "version": "3"}
+			      "secret": {"store": "gsm", "ref": "projects/1234567890/secrets/db/versions/3"}
 			    }
 			  }
 			}`,
@@ -286,8 +254,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  },
 			  "substitutions": {
 			    "resources.db.password": {
-			      "secret": true,
-			      "ref": {"store": "gsm", "ref": "projects/1234567890/secrets/db", "version": "3"}
+			      "secret": {"store": "gsm", "ref": "projects/1234567890/secrets/db/versions/3"}
 			    }
 			  }
 			}`,
@@ -309,7 +276,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			    },
 			    "resources": {"db": {"type": "postgres"}}
 			  },
-			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
 			}`,
 			wantErrText: "resolving variable DB_PASSWORD in container main: saving secret to google secret manager",
 		},
@@ -329,7 +296,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			    },
 			    "resources": {"db": {"type": "postgres"}}
 			  },
-			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
 			}`,
 			wantErrText: "file /etc/app/config.yaml: saving secret to google secret manager",
 		},
@@ -352,7 +319,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			    },
 			    "resources": {"db": {"type": "postgres"}}
 			  },
-			  "substitutions": {"resources.db.password": {"secret": true, "value": "s3cr3t"}}
+			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
 			}`,
 			wantErrText: "cloudrun only supports mounting 1 file per directory",
 		},
@@ -391,7 +358,6 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  },
 			  "substitutions": {
 			    "resources.data": {
-			      "secret": false,
 			      "value": {"kubernetes": {"persistentVolumeClaim": {"claimName": "data"}}}
 			    }
 			  }

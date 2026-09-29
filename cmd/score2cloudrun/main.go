@@ -15,7 +15,7 @@ import (
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
+	"github.com/humanitec/cloudrun-container-runner/internal/score"
 	scorecloudrun "github.com/humanitec/cloudrun-container-runner/internal/score/cloudrun"
 )
 
@@ -64,50 +64,13 @@ const (
 	defaultTimeout = 10 * time.Minute
 )
 
-type SecretRef struct {
-	Store   string `json:"store,omitempty"`
-	Ref     string `json:"ref,omitempty"`
-	Version string `json:"version,omitempty"`
-}
-
-// Substitution defines with what a Score placeholder should be substituted.
-type Substitution struct {
-	Secret bool       `json:"secret"`
-	Value  any        `json:"value,omitempty"`
-	Ref    *SecretRef `json:"ref,omitempty"`
-}
-
 // ResourceInputs represents driver resource inputs. In this case it should contain Score specification,
 // substitution map for placeholders replacement and Cloud Run specific extension.
 type ResourceInputs struct {
-	Id            string                  `json:"id"`
-	Spec          types.Workload          `json:"spec"`
-	Substitutions map[string]Substitution `json:"substitutions,omitempty"`
-	Extensions    inputs.Extensions       `json:"extensions,omitempty"`
-}
-
-func substitutionsToInputs(subs map[string]Substitution) map[string]inputs.Input {
-	out := make(map[string]inputs.Input, len(subs))
-	for key, s := range subs {
-		if s.Secret {
-			var secret *inputs.SecretInput
-			if s.Ref == nil {
-				secret = &inputs.SecretInput{
-					Value: s.Value,
-				}
-			} else {
-				secret = &inputs.SecretInput{
-					Store:   s.Ref.Store,
-					Key:     s.Ref.Ref,
-					Version: s.Ref.Version,
-				}
-			}
-			out[key] = inputs.Input{Secret: secret}
-			continue
-		}
-		out[key] = inputs.Input{Value: s.Value}
-	}
-	return out
+	Id            string                    `json:"id"`
+	Spec          types.Workload            `json:"spec"`
+	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
+	Extensions    score.Extensions          `json:"extensions,omitempty"`
 }
 
 // readResourceInputs loads the resource inputs (JSON) the Container Driver writes for the runner.
@@ -220,7 +183,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 	manifest, err := scorecloudrun.FromScoreWorkload(ctx, scorecloudrun.Options{
 		Name:           serviceName,
 		Workload:       &in.Spec,
-		Substitutions:  substitutionsToInputs(in.Substitutions),
+		Substitutions:  in.Substitutions,
 		Extension:      in.Extensions.GoogleCloudRun,
 		ServiceAccount: os.Getenv(EnvRuntimeServiceAccount),
 	}, secrets)

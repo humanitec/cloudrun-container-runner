@@ -48,11 +48,9 @@
 
   "substitutions": {
     "resources.db.uri": {
-      "secret": true,
-      "value": "postgres://user:password@10.0.0.1:5432/hello-world"
+      "secret": {"type": "direct", "value": "postgres://user:password@10.0.0.1:5432/hello-world"}
     },
     "resources.data": {
-      "secret": false,
       "value": {
         "google-cloud-run": {
           "csi": {
@@ -67,7 +65,7 @@
   },
 
   "extensions": {
-    "cloudrun": {
+    "google-cloud-run": {
       "scaling": {
         "min_instances": 0,
         "max_instances": 10
