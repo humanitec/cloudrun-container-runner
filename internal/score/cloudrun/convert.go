@@ -23,7 +23,6 @@ import (
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
@@ -43,10 +42,10 @@ type Options struct {
 	Workload *types.Workload
 
 	// Substitutions is what the workload's ${...} placeholders resolve to.
-	Substitutions map[string]inputs.Input
+	Substitutions map[string]score.SubValue
 
 	// Extension is the Cloud Run extension, under ExtensionName.
-	Extension *inputs.GoogleCloudRunExtensions
+	Extension *score.GoogleCloudRunExtensions
 
 	// ServiceAccount is the identity the deployed service runs as. Empty
 	// leaves it to Cloud Run, which uses the project's default.
@@ -134,7 +133,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 			})
 			return envVars, nil
 		},
-		EnvVarSecretResolver: func(name string, secret *inputs.SecretInput) (corev1.EnvVarSource, error) {
+		EnvVarSecretResolver: func(name string, secret *score.SecretRef) (corev1.EnvVarSource, error) {
 			return corev1.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
 		},
 		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (corev1.Volume, error) {

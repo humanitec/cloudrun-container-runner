@@ -6,8 +6,6 @@ import (
 	"github.com/score-spec/score-go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/humanitec/cloudrun-container-runner/internal/inputs"
 )
 
 func TestGetAllPlaceholdersInString(t *testing.T) {
@@ -438,14 +436,14 @@ func TestOutputForPlaceholder(t *testing.T) {
 				},
 			},
 		},
-		Substitutions: map[string]inputs.Input{
+		Substitutions: map[string]SubValue{
 			"resources.db.name":     {Value: "db_name"},
 			"resources.db.port":     {Value: 5432},
 			"resources.db.host":     {Value: "db.example.com"},
 			"resources.db.username": {Value: "test-user"},
-			"resources.db.password": {Secret: &inputs.SecretInput{
+			"resources.db.password": {Secret: &SecretRef{
 				Store: "secrets",
-				Key:   "my/db/password",
+				Ref:   "my/db/password",
 			}},
 
 			"resources.readonly-store.name": {Value: "read-only bucket"},
@@ -457,24 +455,24 @@ func TestOutputForPlaceholder(t *testing.T) {
 	testCases := []struct {
 		name          string
 		placeholder   string
-		expected      inputs.Input
+		expected      *SubValue
 		containerName string
 		shouldFail    bool
 	}{
 		{
 			name:        "basic name",
 			placeholder: "resources.db.name",
-			expected:    inputs.Input{Value: "db_name"},
+			expected:    &SubValue{Value: "db_name"},
 		},
 		{
 			name:        "non-default class",
 			placeholder: "resources.readonly-store.name",
-			expected:    inputs.Input{Value: "read-only bucket"},
+			expected:    &SubValue{Value: "read-only bucket"},
 		},
 		{
 			name:        "id specified",
 			placeholder: "resources.shared-store.name",
-			expected:    inputs.Input{Value: "shared bucket"},
+			expected:    &SubValue{Value: "shared bucket"},
 		},
 		{
 			name:        "name does not exist",
@@ -489,12 +487,12 @@ func TestOutputForPlaceholder(t *testing.T) {
 		{
 			name:        "metadata.name",
 			placeholder: "metadata.name",
-			expected:    inputs.Input{Value: "test"},
+			expected:    &SubValue{Value: "test"},
 		},
 		{
 			name:        "metadata annotation",
 			placeholder: "metadata.annotations.one",
-			expected:    inputs.Input{Value: "VALUE1"},
+			expected:    &SubValue{Value: "VALUE1"},
 		},
 		{
 			name:        "non existent metadata annotation",
@@ -506,7 +504,7 @@ func TestOutputForPlaceholder(t *testing.T) {
 			name:          "container image",
 			placeholder:   "container.image",
 			containerName: "two",
-			expected:      inputs.Input{Value: "image-two:latest"},
+			expected:      &SubValue{Value: "image-two:latest"},
 		},
 	}
 	for _, testCase := range testCases {
@@ -569,14 +567,14 @@ func TestExpandFile(t *testing.T) {
 				},
 			},
 		},
-		Substitutions: map[string]inputs.Input{
+		Substitutions: map[string]SubValue{
 			"resources.db.name":     {Value: "db_name"},
 			"resources.db.port":     {Value: 5432},
 			"resources.db.host":     {Value: "db.example.com"},
 			"resources.db.username": {Value: "test_user"},
-			"resources.db.password": {Secret: &inputs.SecretInput{
+			"resources.db.password": {Secret: &SecretRef{
 				Store: "secret",
-				Key:   "mysecret/mypassword",
+				Ref:   "mysecret/mypassword",
 			}},
 
 			"resources.shared-store.name": {Value: "shared bucket"},
@@ -585,13 +583,16 @@ func TestExpandFile(t *testing.T) {
 			"resources.cache.port":     {Value: 6379},
 			"resources.cache.host":     {Value: "cache.example.com"},
 			"resources.cache.username": {Value: "redis_user"},
-			"resources.cache.password": {Secret: &inputs.SecretInput{
+			"resources.cache.password": {Secret: &SecretRef{
+				Type:  DirectSecretType,
 				Value: "r3di5-p455w0rd",
 			}},
-			"resources.cache.db_index": {Secret: &inputs.SecretInput{
+			"resources.cache.db_index": {Secret: &SecretRef{
+				Type:  DirectSecretType,
 				Value: 7,
 			}},
-			"resources.cache.tls": {Secret: &inputs.SecretInput{
+			"resources.cache.tls": {Secret: &SecretRef{
+				Type:  DirectSecretType,
 				Value: map[string]any{"ca": "root-ca", "verify": true},
 			}},
 		},
@@ -603,7 +604,7 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Value: "Hello World!"}, output)
+		assert.Equal(t, &SubValue{Value: "Hello World!"}, output)
 	})
 	t.Run("placeholders no expand", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -612,7 +613,7 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Value: "Should not expand ${resources.db.name}"}, output)
+		assert.Equal(t, &SubValue{Value: "Should not expand ${resources.db.name}"}, output)
 	})
 	t.Run("single placeholder expand", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -620,7 +621,7 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Value: "db_name"}, output)
+		assert.Equal(t, &SubValue{Value: "db_name"}, output)
 	})
 	t.Run("container placeholder", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -628,7 +629,7 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Value: "image-one:latest"}, output)
+		assert.Equal(t, &SubValue{Value: "image-one:latest"}, output)
 	})
 	t.Run("multiple placeholder expand", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -636,7 +637,7 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Value: "db_name shared bucket"}, output)
+		assert.Equal(t, &SubValue{Value: "db_name shared bucket"}, output)
 	})
 	t.Run("single placeholder secret", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -644,9 +645,9 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+		assert.Equal(t, &SubValue{Secret: &SecretRef{
 			Store: "secret",
-			Key:   "mysecret/mypassword",
+			Ref:   "mysecret/mypassword",
 		}}, output)
 	})
 	t.Run("multiple placeholder expand secrets", func(t *testing.T) {
@@ -655,7 +656,8 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+		assert.Equal(t, &SubValue{Secret: &SecretRef{
+			Type:  DirectSecretType,
 			Value: "redis://redis_user:r3di5-p455w0rd@cache.example.com:6379/redis",
 		}}, output)
 	})
@@ -665,7 +667,8 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+		assert.Equal(t, &SubValue{Secret: &SecretRef{
+			Type:  DirectSecretType,
 			Value: "redis://cache.example.com:6379/7",
 		}}, output)
 	})
@@ -675,7 +678,8 @@ func TestExpandFile(t *testing.T) {
 		}
 		output, err := wr.ExpandFile(file, "one")
 		require.NoError(t, err)
-		assert.Equal(t, inputs.Input{Secret: &inputs.SecretInput{
+		assert.Equal(t, &SubValue{Secret: &SecretRef{
+			Type:  DirectSecretType,
 			Value: `tls = {"ca":"root-ca","verify":true}`,
 		}}, output)
 	})
