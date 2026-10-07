@@ -18,8 +18,8 @@ On each deployment it:
 4. Deploys the service and waits until it is running.
 5. Reports the service URL and revision back to the Orchestrator.
 
-When you delete the workload, the runner deletes the Cloud Run service and the
-secrets it created for it.
+When you remove the workload, the runner deletes the Cloud Run service and all
+its secrets.
 
 ## How it runs
 
@@ -29,7 +29,7 @@ The runner is a small container image:
 ghcr.io/humanitec/cloudrun-container-runner
 ```
 
-You don't run it yourself. The Humanitec Operator starts it as a short Kubernetes
+You don't run it yourself. The Humanitec Operator starts it as a short-lived Kubernetes
 Job in your cluster each time a workload is deployed or deleted. You connect it
 to the Orchestrator with a Resource Definition that uses the
 [`humanitec/container-builtin` driver](https://developer.humanitec.com/platform-orchestrator/docs/integration-and-extensions/drivers/container-builtin/).
@@ -87,7 +87,7 @@ example. It sets scaling limits, adds an environment variable, a label.
 
 ## Try it locally
 
-You can build the Cloud Run service file without deploying the service. You need
+You can build the Cloud Run service manifest without deploying the service. You need
 Go installed.
 
 ```bash
