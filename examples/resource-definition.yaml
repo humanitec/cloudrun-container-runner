@@ -56,4 +56,4 @@ entity:
           ref: gcp/cloudrun-deployer-key
 
   criteria:
-    - class: cloud-run
+    - class: google-cloud-run
