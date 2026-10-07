@@ -1,0 +1,23 @@
+apiVersion: humanitec.org/v1b2
+kind: WorkloadExtensions
+spec:
+  google-cloud-run:
+    pod:
+      metadata:
+        annotations:
+          autoscaling.knative.dev/minScale: "0"
+          autoscaling.knative.dev/maxScale: "10"
+      spec:
+        containers:
+          - name: main
+            env:
+              - name: LOG_LEVEL
+                value: info
+    service:
+      metadata:
+        labels:
+          team: platform
+      spec:
+        template:
+          spec:
+            containerConcurrency: 80

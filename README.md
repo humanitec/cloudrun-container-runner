@@ -77,6 +77,9 @@ parts:
 Both are patches. The runner builds the service from Score first, then merges
 your patch on top.
 
+See [examples/score.humanitec.yaml](examples/score.humanitec.yaml) for an
+example. It sets scaling limits, adds an environment variable, a label.
+
 ## Limits
 
 - One port per service. Cloud Run only exposes one.
