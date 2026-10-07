@@ -51,6 +51,10 @@ to the Orchestrator with a Resource Definition that uses the
 3. Deploy a Score workload that matches it. A small one is in
    [examples/score.yaml](examples/score.yaml).
 
+   ```bash
+   humctl score deploy --class=google-cloud-run
+   ```
+
 ## Settings
 
 The runner reads these environment variables. Set them under `job.variables` in
