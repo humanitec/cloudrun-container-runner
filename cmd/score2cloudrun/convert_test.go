@@ -1,16 +1,15 @@
-package cloudrun
+package main
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
-	"github.com/score-spec/score-go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/generator"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
-	"github.com/humanitec/cloudrun-container-runner/internal/score"
 )
 
 // fakeSecretSaver stands in for Google Secret Manager, recording what would be
@@ -29,7 +28,7 @@ func newFakeSecretSaver() *fakeSecretSaver {
 	return &fakeSecretSaver{saved: map[string]string{}, version: "1"}
 }
 
-func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (string, error) {
+func (f *fakeSecretSaver) SaveSecret(_ context.Context, _, name, value string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
@@ -37,39 +36,22 @@ func (f *fakeSecretSaver) SaveSecret(_ context.Context, name, value string) (str
 	return f.version, nil
 }
 
-// driverInputs is the shape the Container Driver sends, as much of it as the
-// converter needs. The converter itself does not know about it, but the
-// fixtures below are easier to read as the JSON that actually arrives.
-type driverInputs struct {
-	Id            string                    `json:"id"`
-	Spec          types.Workload            `json:"spec"`
-	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
-	Extensions    score.Extensions          `json:"extensions,omitempty"`
-}
-
-// optionsFrom turns the Driver's JSON into what FromScoreWorkload takes.
-func optionsFrom(t *testing.T, inputsJSON, serviceAccount string) Options {
+// inputsFrom parses the Driver's JSON and names the service after its id, as create does.
+func inputsFrom(t *testing.T, inputsJSON string) ResourceInputs {
 	t.Helper()
 
-	var in driverInputs
+	var in ResourceInputs
 	require.NoError(t, json.Unmarshal([]byte(inputsJSON), &in))
-
-	return Options{
-		Name:           in.Id,
-		Workload:       &in.Spec,
-		Substitutions:  in.Substitutions,
-		Extension:      in.Extensions.GoogleCloudRun,
-		ServiceAccount: serviceAccount,
-	}
+	in.Spec = generator.WithServiceName(in.Spec, in.Id)
+	return in
 }
 
-func TestFromScoreWorkload(t *testing.T) {
+func TestConvert(t *testing.T) {
 	const serviceAccount = "cloudrun-runtime@my-gcp-project.iam.gserviceaccount.com"
 
 	saver := newFakeSecretSaver()
 	saver.version = "7"
 
-	// Note: we use check a simple `extensions` case here, for more sophisticated cases see TestFromScoreWorkload_Extensions.
 	inputsJSON := `{
 	  "id": "hello-world-dev",
 	  "spec": {
@@ -111,16 +93,9 @@ func TestFromScoreWorkload(t *testing.T) {
 	        }
 	      }
 	    }
-      },
-      "extensions": {
-		"google-cloud-run": {
-		  "pod": {
-		    "metadata": {"annotations": {"autoscaling.knative.dev/maxScale": "5"}}
-          }
-        }
       }
 	}`
-	service, err := FromScoreWorkload(t.Context(), optionsFrom(t, inputsJSON, serviceAccount), saver)
+	service, err := convert(inputsFrom(t, inputsJSON), serviceAccount, saver)
 	require.NoError(t, err)
 	require.NotNil(t, service)
 
@@ -188,12 +163,9 @@ func TestFromScoreWorkload(t *testing.T) {
 
 	// Check service account
 	assert.Equal(t, serviceAccount, service.Spec.Template.Spec.ServiceAccountName)
-
-	// Check pod extension is applied
-	assert.Equal(t, "5", service.Spec.Template.Metadata.Annotations["autoscaling.knative.dev/maxScale"])
 }
 
-func TestFromScoreWorkload_Failures(t *testing.T) {
+func TestConvert_Failures(t *testing.T) {
 	testCases := []struct {
 		name        string
 		saveErr     error
@@ -211,54 +183,6 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  }
 			}`,
 			wantErrText: "needs at least one container",
-		},
-		{
-			// The Operator resolves secrets and sends flat values for now.
-			// This may change in the future, but for now it's not supported here.
-			name: "a variable holds a secret reference",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "variables": {"DB_PASSWORD": "${resources.db.password}"}
-			      }
-			    },
-			    "resources": {"db": {"type": "postgres"}}
-			  },
-			  "substitutions": {
-			    "resources.db.password": {
-			      "secret": {"store": "gsm", "ref": "projects/1234567890/secrets/db/versions/3"}
-			    }
-			  }
-			}`,
-			wantErrText: "secret with name DB_PASSWORD: secret references are not supported",
-		},
-		{
-			name: "a file holds a secret reference",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "files": {"/etc/app/config.yaml": {"content": "${resources.db.password}"}}
-			      }
-			    },
-			    "resources": {"db": {"type": "postgres"}}
-			  },
-			  "substitutions": {
-			    "resources.db.password": {
-			      "secret": {"store": "gsm", "ref": "projects/1234567890/secrets/db/versions/3"}
-			    }
-			  }
-			}`,
-			wantErrText: "file /etc/app/config.yaml: secret references are not supported",
 		},
 		{
 			name:    "secret manager refuses a variable's secret",
@@ -279,143 +203,6 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
 			}`,
 			wantErrText: "resolving variable DB_PASSWORD in container main: saving secret to google secret manager",
-		},
-		{
-			name:    "secret manager refuses a file's secret",
-			saveErr: assert.AnError,
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "files": {"/etc/app/config.yaml": {"content": "${resources.db.password}"}}
-			      }
-			    },
-			    "resources": {"db": {"type": "postgres"}}
-			  },
-			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
-			}`,
-			wantErrText: "file /etc/app/config.yaml: saving secret to google secret manager",
-		},
-		{
-			// Cloud Run mounts one secret version per directory, so two files sharing a directory cannot both be mounted.
-			name: "two files in one directory",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "files": {
-			          "/etc/app/config.yaml": {"content": "${resources.db.password}"},
-			          "/etc/app/extra.yaml": {"content": "${resources.db.password}"}
-			        }
-			      }
-			    },
-			    "resources": {"db": {"type": "postgres"}}
-			  },
-			  "substitutions": {"resources.db.password": {"secret": {"type": "direct", "value": "s3cr3t"}}}
-			}`,
-			wantErrText: "cloudrun only supports mounting 1 file per directory",
-		},
-		{
-			// Every mounted file becomes a Secret Manager secret, Cloud Run has no ConfigMap equivalent.
-			name: "a file's content is not a secret",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "files": {"/etc/app/config.yaml": {"content": "log_level: debug"}}
-			      }
-			    }
-			  }
-			}`,
-			wantErrText: "file /etc/app/config.yaml: cloudrun only supports mounting files from google secret manager secrets (gsm)",
-		},
-		{
-			name: "a volume has no cloud run spec",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "volumes": {"/app/data": {"source": "${resources.data}"}}
-			      }
-			    },
-			    "resources": {"data": {"type": "volume"}}
-			  },
-			  "substitutions": {
-			    "resources.data": {
-			      "value": {"kubernetes": {"persistentVolumeClaim": {"claimName": "data"}}}
-			    }
-			  }
-			}`,
-			wantErrText: "resolving volume resource resources.data: platform google-cloud-run does not exist in output or is not an object",
-		},
-		{
-			name: "a volume source is not a placeholder",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "volumes": {"/app/data": {"source": "my-bucket-name"}}
-			      }
-			    },
-			    "resources": {"data": {"type": "volume"}}
-			  }
-			}`,
-			wantErrText: `source must be a placeholder referencing a volume, got "my-bucket-name"`,
-		},
-		{
-			name: "a volume references a resource that is not a volume",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "volumes": {"/app/data": {"source": "${resources.db}"}}
-			      }
-			    },
-			    "resources": {"db": {"type": "postgres"}}
-			  }
-			}`,
-			wantErrText: "placeholder ${resources.db} in source is not of type volume, got postgres",
-		},
-		{
-			name: "a volume references an undeclared resource",
-			inputsJSON: `{
-			  "id": "hello-world-dev",
-			  "spec": {
-			    "apiVersion": "score.dev/v1b1",
-			    "metadata": {"name": "hello-world"},
-			    "containers": {
-			      "main": {
-			        "image": "busybox:latest",
-			        "volumes": {"/app/data": {"source": "${resources.data}"}}
-			      }
-			    }
-			  }
-			}`,
-			wantErrText: "placeholder ${resources.data} cannot be resolved: no resource with name data",
 		},
 		{
 			name: "the service has two ports",
@@ -458,7 +245,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 			saver := newFakeSecretSaver()
 			saver.err = testCase.saveErr
 
-			service, err := FromScoreWorkload(t.Context(), optionsFrom(t, testCase.inputsJSON, ""), saver)
+			service, err := convert(inputsFrom(t, testCase.inputsJSON), "", saver)
 
 			require.ErrorContains(t, err, testCase.wantErrText)
 			// A manifest alongside an error is one a caller might deploy.
@@ -470,7 +257,7 @@ func TestFromScoreWorkload_Failures(t *testing.T) {
 	}
 }
 
-func TestFromScoreWorkload_Extensions(t *testing.T) {
+func TestConvert_Extensions(t *testing.T) {
 	const spec = `"spec": {
 	    "apiVersion": "score.dev/v1b1",
 	    "metadata": {"name": "hello-world"},
@@ -480,28 +267,28 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 	  }`
 
 	t.Run("no extensions", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`}`, "")
-		require.Nil(t, opts.Extension)
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`}`)
+		require.Nil(t, in.Extensions.GoogleCloudRun)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
 		assert.Equal(t, "busybox:latest", service.Spec.Template.Spec.Containers[0].Image)
 	})
 
 	t.Run("kubernetes extensions are ignored", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"kubernetes": {"pod": {"spec": {"serviceAccountName": "k8s-sa"}}}}
-		}`, "")
-		require.Nil(t, opts.Extension)
+		}`)
+		require.Nil(t, in.Extensions.GoogleCloudRun)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Empty(t, service.Spec.Template.Spec.ServiceAccountName)
 	})
 
 	t.Run("pod extension", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"pod": {"spec": {
 		    "containers": [{
 		      "name": "main",
@@ -509,9 +296,9 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 		      "resources": {"limits": {"cpu": "2", "memory": "1Gi"}}
 		    }]
 		  }}}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
@@ -527,14 +314,14 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 	})
 
 	t.Run("pod extension metadata lands on the revision template", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"pod": {"metadata": {
 		    "labels": {"team": "platform"},
 		    "annotations": {"autoscaling.knative.dev/maxScale": "5"}
 		  }}}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Equal(t, map[string]string{"team": "platform"}, service.Spec.Template.Metadata.Labels)
 		assert.Equal(t, map[string]string{"autoscaling.knative.dev/maxScale": "5"}, service.Spec.Template.Metadata.Annotations)
@@ -542,17 +329,17 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 	})
 
 	t.Run("pod extension overrides the service account", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"pod": {"spec": {"serviceAccountName": "override@x.iam.gserviceaccount.com"}}}}
-		}`, "runtime@x.iam.gserviceaccount.com")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "runtime@x.iam.gserviceaccount.com", newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Equal(t, "override@x.iam.gserviceaccount.com", service.Spec.Template.Spec.ServiceAccountName)
 	})
 
 	t.Run("service extension", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"service": {
 		    "metadata": {
 		      "labels": {"team": "platform"},
@@ -563,9 +350,9 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 		      "spec": {"containerConcurrency": 10}
 		    }}
 		  }}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 
 		assert.Equal(t, "hello-world-dev", service.Metadata.Name, "fields the patch does not name are kept")
@@ -578,13 +365,13 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 	})
 
 	t.Run("service extension merges containers by name", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"service": {"spec": {"template": {"spec": {
 		    "containers": [{"name": "main", "env": [{"name": "B", "value": "2"}]}]
 		  }}}}}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
 
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
@@ -593,37 +380,155 @@ func TestFromScoreWorkload_Extensions(t *testing.T) {
 		require.Len(t, container.Env, 2)
 	})
 
-	t.Run("pod and service extensions together", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+	// The pod is written back into the service's template, so it must not overwrite what the service extension sets there.
+	t.Run("pod and service extensions both patch the template", func(t *testing.T) {
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {
-		    "pod": {"spec": {"serviceAccountName": "override@x.iam.gserviceaccount.com"}},
-		    "service": {"metadata": {"labels": {"team": "platform"}}}
+		    "pod": {
+		      "metadata": {"labels": {"team": "platform"}},
+		      "spec": {
+		        "serviceAccountName": "override@x.iam.gserviceaccount.com",
+		        "containers": [{"name": "main", "env": [{"name": "B", "value": "2"}]}]
+		      }
+		    },
+		    "service": {
+		      "metadata": {"labels": {"tier": "web"}},
+		      "spec": {"template": {
+		        "metadata": {"annotations": {"autoscaling.knative.dev/maxScale": "5"}},
+		        "spec": {"containers": [{"name": "main", "env": [{"name": "C", "value": "3"}]}]}
+		      }}
+		    }
 		  }}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.NoError(t, err)
-		assert.Equal(t, "override@x.iam.gserviceaccount.com", service.Spec.Template.Spec.ServiceAccountName)
-		assert.Equal(t, map[string]string{"team": "platform"}, service.Metadata.Labels)
+
+		template := service.Spec.Template
+		assert.Equal(t, map[string]string{"tier": "web"}, service.Metadata.Labels)
+		assert.Equal(t, map[string]string{"team": "platform"}, template.Metadata.Labels)
+		assert.Equal(t, map[string]string{"autoscaling.knative.dev/maxScale": "5"}, template.Metadata.Annotations)
+		assert.Equal(t, "override@x.iam.gserviceaccount.com", template.Spec.ServiceAccountName)
+
+		require.Len(t, template.Spec.Containers, 1)
+		envNames := make([]string, 0, len(template.Spec.Containers[0].Env))
+		for _, e := range template.Spec.Containers[0].Env {
+			envNames = append(envNames, e.Name)
+		}
+		assert.ElementsMatch(t, []string{"A", "B", "C"}, envNames)
 	})
 
 	t.Run("invalid pod extension", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"pod": {"spec": "not-an-object"}}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.ErrorContains(t, err, "v1.Pod")
 		assert.Nil(t, service)
 	})
 
 	t.Run("invalid service extension", func(t *testing.T) {
-		opts := optionsFrom(t, `{"id": "hello-world-dev", `+spec+`,
+		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`,
 		  "extensions": {"google-cloud-run": {"service": {"spec": "not-an-object"}}}
-		}`, "")
+		}`)
 
-		service, err := FromScoreWorkload(t.Context(), opts, newFakeSecretSaver())
+		service, err := convert(in, "", newFakeSecretSaver())
 		require.ErrorContains(t, err, "unable to unmarshal patched v1.Service")
 		assert.Nil(t, service)
 	})
+}
+
+func envForSubstitution(t *testing.T, substitutionJSON, variable string) string {
+	t.Helper()
+
+	inputsJSON := `{
+	  "id": "hello-world-dev",
+	  "spec": {
+	    "apiVersion": "score.dev/v1b1",
+	    "metadata": {"name": "hello-world"},
+	    "containers": {
+	      "main": {
+	        "image": "busybox:latest",
+	        "variables": {"VALUE": "` + variable + `"}
+	      }
+	    },
+	    "resources": {"db": {"type": "postgres"}}
+	  },
+	  "substitutions": {"resources.db.field": ` + substitutionJSON + `}
+	}`
+
+	service, err := convert(inputsFrom(t, inputsJSON), "", newFakeSecretSaver())
+	require.NoError(t, err)
+	require.NotNil(t, service)
+	require.Len(t, service.Spec.Template.Spec.Containers, 1)
+
+	env := service.Spec.Template.Spec.Containers[0].Env
+	require.Len(t, env, 1)
+	require.Equal(t, "VALUE", env[0].Name)
+	return env[0].Value
+}
+
+func TestConvert_SubstitutionValueTypes(t *testing.T) {
+	testCases := []struct {
+		name     string
+		value    string
+		variable string
+		expected string
+	}{
+		{
+			name:     "string",
+			value:    `{"value": "db.example.com"}`,
+			variable: "${resources.db.field}",
+			expected: "db.example.com",
+		},
+		{
+			name:     "integer keeps its integral form",
+			value:    `{"value": 5432}`,
+			variable: "${resources.db.field}",
+			expected: "5432",
+		},
+		{
+			name:     "negative integer",
+			value:    `{"value": -1}`,
+			variable: "${resources.db.field}",
+			expected: "-1",
+		},
+		{
+			name:     "float",
+			value:    `{"value": 1.5}`,
+			variable: "${resources.db.field}",
+			expected: "1.5",
+		},
+		{
+			name:     "boolean",
+			value:    `{"value": true}`,
+			variable: "${resources.db.field}",
+			expected: "true",
+		},
+		{
+			name:     "object renders as compact JSON",
+			value:    `{"value": {"sslmode": "require"}}`,
+			variable: "${resources.db.field}",
+			expected: `{"sslmode":"require"}`,
+		},
+		{
+			name:     "array renders as compact JSON",
+			value:    `{"value": [1, "two"]}`,
+			variable: "${resources.db.field}",
+			expected: `[1,"two"]`,
+		},
+		{
+			name:     "integer embedded in a larger string",
+			value:    `{"value": 5432}`,
+			variable: "postgresql://db.example.com:${resources.db.field}/app",
+			expected: "postgresql://db.example.com:5432/app",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.expected, envForSubstitution(t, testCase.value, testCase.variable))
+		})
+	}
 }

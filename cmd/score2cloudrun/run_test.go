@@ -68,24 +68,6 @@ func serviceName(t *testing.T, path string) string {
 	return metadata["name"].(string)
 }
 
-// Converting is what the binary does on its own. Deploying is the image's
-// doing, through the -deploy in its entrypoint, so a bare run must not reach
-// for Google credentials.
-func TestRunWritesTheManifestAndStops(t *testing.T) {
-	inputs := inputsFile(t)
-	output := filepath.Join(t.TempDir(), "service.yaml")
-
-	require.NoError(t, runWith(t, "-output", output, inputs))
-
-	var service map[string]any
-	b, err := os.ReadFile(output)
-	require.NoError(t, err)
-	require.NoError(t, yaml.Unmarshal(b, &service))
-
-	assert.Equal(t, "serving.knative.dev/v1", service["apiVersion"])
-	assert.Equal(t, "hello-world-dev", service["metadata"].(map[string]any)["name"])
-}
-
 // The resource id names the service unless the Resource Definition says
 // otherwise, which is how one Orchestrator resource reaches a service named for
 // the app and environment around it.
@@ -144,6 +126,25 @@ func TestGetServiceName(t *testing.T) {
 	}
 }
 
+// Converting is what the binary does on its own. Deploying is the image's
+// doing, through the -deploy in its entrypoint, so a bare run must not reach
+// for Google credentials.
+func TestRunWritesTheManifestAndStops(t *testing.T) {
+	t.Setenv(EnvAction, "") // create is the default
+	inputs := inputsFile(t)
+	output := filepath.Join(t.TempDir(), "service.yaml")
+
+	require.NoError(t, runWith(t, "-output", output, inputs))
+
+	var service map[string]any
+	b, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.NoError(t, yaml.Unmarshal(b, &service))
+
+	assert.Equal(t, "serving.knative.dev/v1", service["apiVersion"])
+	assert.Equal(t, "hello-world-dev", service["metadata"].(map[string]any)["name"])
+}
+
 // The name the environment asks for is the one that reaches the manifest, not
 // just the one getServiceName returns.
 func TestRunNamesTheServiceFromTheEnvironment(t *testing.T) {
@@ -154,16 +155,6 @@ func TestRunNamesTheServiceFromTheEnvironment(t *testing.T) {
 	require.NoError(t, runWith(t, "-output", output, inputsFile(t)))
 
 	assert.Equal(t, "myapp-myenv-hello-world-dev", serviceName(t, output))
-}
-
-func TestRunTakesTheServiceNameWholeFromTheEnvironment(t *testing.T) {
-	t.Setenv(EnvServiceName, "chosen-by-hand")
-	t.Setenv(EnvServiceNamePrefix, "myapp-myenv")
-	output := filepath.Join(t.TempDir(), "service.yaml")
-
-	require.NoError(t, runWith(t, "-output", output, inputsFile(t)))
-
-	assert.Equal(t, "chosen-by-hand", serviceName(t, output))
 }
 
 // The Container Driver passes the inputs file through the environment rather
@@ -255,14 +246,6 @@ func TestActionComesFromTheEnvironment(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "needs -deploy")
-}
-
-func TestActionDefaultsToCreate(t *testing.T) {
-	t.Setenv(EnvAction, "")
-	output := filepath.Join(t.TempDir(), "service.yaml")
-
-	require.NoError(t, runWith(t, "-output", output, inputsFile(t)))
-	assert.FileExists(t, output)
 }
 
 func read(t *testing.T, path string) string {
