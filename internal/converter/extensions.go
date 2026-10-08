@@ -1,4 +1,4 @@
-package score
+package converter
 
 type GoogleCloudRunExtensions struct {
 	Pod     map[string]interface{} `json:"pod"`

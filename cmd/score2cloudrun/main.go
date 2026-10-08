@@ -12,11 +12,12 @@ import (
 	"github.com/score-spec/score-go/types"
 	"sigs.k8s.io/yaml"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/converter"
+	scorecloudrun "github.com/humanitec/cloudrun-container-runner/internal/converter/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
-	scorecloudrun "github.com/humanitec/cloudrun-container-runner/internal/score/cloudrun"
 )
 
 var version = "dev"
@@ -70,7 +71,7 @@ type ResourceInputs struct {
 	Id            string                    `json:"id"`
 	Spec          types.Workload            `json:"spec"`
 	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
-	Extensions    score.Extensions          `json:"extensions,omitempty"`
+	Extensions    converter.Extensions      `json:"extensions,omitempty"`
 }
 
 // readResourceInputs loads the resource inputs (JSON) the Container Driver writes for the runner.

@@ -4,7 +4,7 @@
 // They do duplicate some functionality provided in
 // github.com/score-spec/score-go, but this has been done to allow for easier
 // integration into the Ternki system.
-package score
+package converter
 
 import (
 	"fmt"
@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/score-spec/score-go/types"
+
+	"github.com/humanitec/cloudrun-container-runner/internal/score"
 
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
@@ -200,7 +202,7 @@ func ReplaceAllPlaceholders(obj any, placeholderStrs map[string]string) (any, er
 
 type WorkloadResource struct {
 	Workload      *types.Workload
-	Substitutions map[string]SubValue
+	Substitutions map[string]score.SubValue
 	Name          string
 }
 
@@ -225,7 +227,7 @@ func placeholderResolveInMap(placeholder []string, m map[string]any) (any, error
 // OutputForPlaceholder resolves the placeholder to either a value or secret.
 //
 // Any issues with resolution results in an error.
-func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName string) (*SubValue, error) {
+func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName string) (*score.SubValue, error) {
 	parts := strings.Split(placeholder, ".")
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("invalid placeholder: must have at least 2 parts, got \"%s\"", placeholder)
@@ -241,11 +243,11 @@ func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName strin
 		if err != nil {
 			return nil, fmt.Errorf("resolving placeholder \"%s\": %w", placeholder, err)
 		}
-		return &SubValue{Value: val}, nil
+		return &score.SubValue{Value: val}, nil
 	case "container":
 		if container, exists := w.Workload.Containers[containerName]; exists {
 			if parts[1] == "image" {
-				return &SubValue{Value: container.Image}, nil
+				return &score.SubValue{Value: container.Image}, nil
 			}
 			return nil, fmt.Errorf("resolving placeholder \"%s\": container can only reference image", placeholder)
 		}
@@ -261,12 +263,12 @@ func (w *WorkloadResource) OutputForPlaceholder(placeholder, containerName strin
 // Currnetly, secret templating is not supported except where raw secrets are
 // used, so in those cases, unless the secret is on its own in the file, an
 // error will be returned.
-func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName string) (*SubValue, error) {
+func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName string) (*score.SubValue, error) {
 	if file.Content == nil {
 		return nil, fmt.Errorf("content missing")
 	}
 	if file.NoExpand != nil && *file.NoExpand {
-		return &SubValue{Value: *file.Content}, nil
+		return &score.SubValue{Value: *file.Content}, nil
 	}
 	placeholders := GetAllPlaceholders(*file.Content)
 	placeholderStrs := map[string]string{}
@@ -301,7 +303,7 @@ func (w *WorkloadResource) ExpandFile(file types.ContainerFile, containerName st
 		return nil, err
 	}
 	if isOutputSecret {
-		return &SubValue{Secret: &SecretRef{Value: expandedFile, Type: DirectSecretType}}, nil
+		return &score.SubValue{Secret: &score.SecretRef{Value: expandedFile, Type: score.DirectSecretType}}, nil
 	}
-	return &SubValue{Value: expandedFile}, nil
+	return &score.SubValue{Value: expandedFile}, nil
 }

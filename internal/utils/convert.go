@@ -5,19 +5,6 @@ import (
 	"fmt"
 )
 
-func AsMap(obj any) (map[string]any, error) {
-	var objAsMap map[string]any
-	objAsBytes, err := json.Marshal(obj)
-	if err != nil {
-		return nil, fmt.Errorf("unable to serialize inputs: %w", err)
-	}
-	err = json.Unmarshal(objAsBytes, &objAsMap)
-	if err != nil {
-		return nil, fmt.Errorf("unable to deserialize inputs: %w", err)
-	}
-	return objAsMap, err
-}
-
 func DecodeViaJSON(in, out any) error {
 	objAsBytes, err := json.Marshal(in)
 	if err != nil {
