@@ -66,12 +66,32 @@
 
   "extensions": {
     "google-cloud-run": {
-      "scaling": {
-        "min_instances": 0,
-        "max_instances": 10
+      "pod": {
+        "metadata": {
+          "annotations": {
+            "autoscaling.knative.dev/minScale": "0",
+            "autoscaling.knative.dev/maxScale": "10"
+          }
+        },
+        "spec": {
+          "containers": [
+            {
+              "name": "main",
+              "env": [{"name": "LOG_LEVEL", "value": "info"}]
+            }
+          ]
+        }
       },
-      "allow_unauthenticated": true,
-      "service_account": "cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com"
+      "service": {
+        "metadata": {
+          "labels": {"team": "platform"}
+        },
+        "spec": {
+          "template": {
+            "spec": {"containerConcurrency": 80}
+          }
+        }
+      }
     }
   }
 }
