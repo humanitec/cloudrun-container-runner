@@ -1,4 +1,4 @@
-package score
+package converter
 
 import (
 	"crypto/sha1"
@@ -14,6 +14,8 @@ import (
 	k8s "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/score"
+
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
@@ -28,7 +30,7 @@ type K8sScoreConverter struct {
 
 // EnvVarSecretResolver returns an core.EnvVarSource object.
 // name is guaranteed to be a valid Secret key and be unique within the workload.
-type EnvVarSecretResolver func(name string, secret *SecretRef) (core.EnvVarSource, error)
+type EnvVarSecretResolver func(name string, secret *score.SecretRef) (core.EnvVarSource, error)
 
 // ContainerFileResolver returns a volume that will be used as the container file
 type ContainerFileResolver func(workloadRes WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (core.Volume, error)
@@ -101,7 +103,7 @@ func placeholderToVar(placeholder string) string {
 	return "__SECRET__" + illegalPosixEnvVarChars.ReplaceAllString(strings.TrimPrefix(placeholder, "resources."), "_") + "__"
 }
 
-func NoSecretsResolver(secret *SecretRef) (core.EnvVar, error) {
+func NoSecretsResolver(secret *score.SecretRef) (core.EnvVar, error) {
 	return core.EnvVar{}, fmt.Errorf("no secrets expected")
 }
 
@@ -133,7 +135,7 @@ func (c *K8sScoreConverter) EnvVar(containerName string) ([]core.EnvVar, error) 
 		if len(container.Variables) > 0 {
 			placeholders := GetAllPlaceholders(container.Variables)
 			placeholderStrs := map[string]string{}
-			secretVars := map[string]*SecretRef{}
+			secretVars := map[string]*score.SecretRef{}
 			for _, placeholder := range placeholders {
 				output, err := c.OutputForPlaceholder(placeholder, containerName)
 				if err != nil {

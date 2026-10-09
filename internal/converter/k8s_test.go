@@ -1,4 +1,4 @@
-package score
+package converter
 
 import (
 	"fmt"
@@ -13,10 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/score"
+
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
-func testEnvVarSecretResolver(name string, secret *SecretRef) (core.EnvVarSource, error) {
+func testEnvVarSecretResolver(name string, secret *score.SecretRef) (core.EnvVarSource, error) {
 	if secret.Store != "secret" {
 		return core.EnvVarSource{}, fmt.Errorf("not a recognised secret store")
 	}
@@ -184,12 +186,12 @@ func TestK8sEnvFromScore(t *testing.T) {
 			},
 		},
 	}
-	params := map[string]SubValue{
+	params := map[string]score.SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &SecretRef{
+		"resources.db.password": {Secret: &score.SecretRef{
 			Store: "secret",
 			Ref:   "mysecret/mypassword",
 		}},
@@ -312,12 +314,12 @@ func TestK8sFilesFromScore(t *testing.T) {
 			Type: "cheese",
 		},
 	}
-	params := map[string]SubValue{
+	params := map[string]score.SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &SecretRef{
+		"resources.db.password": {Secret: &score.SecretRef{
 			Store: "secret",
 			Ref:   "mysecret/mypassword",
 		}},
@@ -523,7 +525,7 @@ func TestK8sFilesFromScore(t *testing.T) {
 }
 
 func TestK8sVolumesFromScore(t *testing.T) {
-	substitutions := map[string]SubValue{
+	substitutions := map[string]score.SubValue{
 		"resources.vol-01": {Value: map[string]any{
 			"kubernetes": map[string]any{
 				"secret": map[string]any{
@@ -552,7 +554,7 @@ func TestK8sVolumesFromScore(t *testing.T) {
 				"secret": "should be an object",
 			},
 		}},
-		"resources.secret-volume": {Secret: &SecretRef{
+		"resources.secret-volume": {Secret: &score.SecretRef{
 			Store: "secret",
 			Ref:   "mysecret/myvolume",
 		}},
@@ -895,12 +897,12 @@ func TestK8sVolumesFromScore(t *testing.T) {
 }
 
 func TestK8sSpodSpecFromScore(t *testing.T) {
-	params := map[string]SubValue{
+	params := map[string]score.SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
-		"resources.db.password": {Secret: &SecretRef{
+		"resources.db.password": {Secret: &score.SecretRef{
 			Store: "secret",
 			Ref:   "mysecret/mypassword",
 		}},

@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/converter"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
 	"github.com/humanitec/cloudrun-container-runner/internal/utils"
@@ -45,7 +46,7 @@ type Options struct {
 	Substitutions map[string]score.SubValue
 
 	// Extension is the Cloud Run extension, under ExtensionName.
-	Extension *score.GoogleCloudRunExtensions
+	Extension *converter.GoogleCloudRunExtensions
 
 	// ServiceAccount is the identity the deployed service runs as. Empty
 	// leaves it to Cloud Run, which uses the project's default.
@@ -60,9 +61,9 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 	if workload == nil || len(workload.Containers) == 0 {
 		return nil, fmt.Errorf("a Cloud Run service needs at least one container")
 	}
-	var converter score.K8sScoreConverter
-	converter = score.K8sScoreConverter{
-		WorkloadResource: score.WorkloadResource{
+	var scoreConverter converter.K8sScoreConverter
+	scoreConverter = converter.K8sScoreConverter{
+		WorkloadResource: converter.WorkloadResource{
 			Workload:      workload,
 			Substitutions: opts.Substitutions,
 			Name:          workloadName,
@@ -70,12 +71,12 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		EnvVarOverride: func(containerName string) ([]corev1.EnvVar, error) {
 			envVars := make([]corev1.EnvVar, 0)
 			for name, value := range workload.Containers[containerName].Variables {
-				placeholders := score.GetAllPlaceholdersInString(value)
+				placeholders := converter.GetAllPlaceholdersInString(value)
 
 				placeholderStrs := map[string]string{}
 				isSecret := false
 				for _, placeholder := range placeholders {
-					output, err := converter.OutputForPlaceholder(placeholder, containerName)
+					output, err := scoreConverter.OutputForPlaceholder(placeholder, containerName)
 					if err != nil {
 						return nil, err
 					}
@@ -99,7 +100,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 						placeholderStrs[placeholder] = str
 					}
 				}
-				replacedVal, err := score.ReplaceAllPlaceholdersInString(value, placeholderStrs)
+				replacedVal, err := converter.ReplaceAllPlaceholdersInString(value, placeholderStrs)
 				if err != nil {
 					return nil, fmt.Errorf("resolving variable %s in container %s: %w", name, containerName, err)
 				}
@@ -136,7 +137,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 		EnvVarSecretResolver: func(name string, secret *score.SecretRef) (corev1.EnvVarSource, error) {
 			return corev1.EnvVarSource{}, fmt.Errorf("secret resolver is not implemented for Cloud Run")
 		},
-		ContainerFileResolver: func(workloadRes score.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (corev1.Volume, error) {
+		ContainerFileResolver: func(workloadRes converter.WorkloadResource, volumeName, dir string, files map[string]*types.ContainerFile, containerName string) (corev1.Volume, error) {
 			if len(files) > 1 {
 				// See https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations
 				return corev1.Volume{}, fmt.Errorf("more then one file specified in directory %s: cloudrun only supports mounting 1 file per directory from google secret manager(gsm), got %d (See: https://docs.cloud.google.com/run/docs/configuring/services/secrets#limitations)", dir, len(files))
@@ -188,7 +189,7 @@ func FromScoreWorkload(ctx context.Context, opts Options, secrets SecretSaver) (
 			}, nil
 		},
 	}
-	podSpec, err := converter.PodSpec("google-cloud-run")
+	podSpec, err := scoreConverter.PodSpec("google-cloud-run")
 	if err != nil {
 		return nil, err
 	}

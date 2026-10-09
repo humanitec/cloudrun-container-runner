@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/converter"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
 )
@@ -44,7 +45,7 @@ type driverInputs struct {
 	Id            string                    `json:"id"`
 	Spec          types.Workload            `json:"spec"`
 	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
-	Extensions    score.Extensions          `json:"extensions,omitempty"`
+	Extensions    converter.Extensions      `json:"extensions,omitempty"`
 }
 
 // optionsFrom turns the Driver's JSON into what FromScoreWorkload takes.
