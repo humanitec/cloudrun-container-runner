@@ -42,7 +42,7 @@ func NewServiceBuilder(workload types.Workload, substitutions map[string]score.S
 	}
 }
 
-func (b *ServiceBuilder) EnvVar(containerName string) ([]corev1.EnvVar, error) {
+func (b *ServiceBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1.EnvVar, error) {
 	envVars := make([]corev1.EnvVar, 0)
 	for name, value := range b.workload.Containers[containerName].Variables {
 		placeholders := GetAllPlaceholdersInString(value)
@@ -81,8 +81,6 @@ func (b *ServiceBuilder) EnvVar(containerName string) ([]corev1.EnvVar, error) {
 		if isSecret {
 			// Save the secret to GSM and add the env var reference
 			secretName := secretmanager.SecretName(b.serviceName, containerName, "env", name)
-			// TODO: pass a context
-			ctx := context.Background()
 			secretVersion, err := b.secrets.SaveSecret(ctx, b.serviceName, secretName, replacedVal)
 			if err != nil {
 				return nil, fmt.Errorf("resolving variable %s in container %s: saving secret to google secret manager: %w", name, containerName, err)
@@ -186,7 +184,7 @@ func (b *ServiceBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Vo
 	return volumeMounts, volumesAsSlice, nil
 }
 
-func (b *ServiceBuilder) ContainerFiles() (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
+func (b *ServiceBuilder) ContainerFiles(ctx context.Context) (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
 	volumes := make([]corev1.Volume, 0)
 	volumeMounts := map[string][]corev1.VolumeMount{}
 
@@ -246,8 +244,6 @@ func (b *ServiceBuilder) ContainerFiles() (map[string][]corev1.VolumeMount, []co
 				return nil, nil, fmt.Errorf("file %s/%s: %w", dir, fileName, err)
 			}
 			secretName := secretmanager.SecretName(b.serviceName, containerName, "vol", fileName)
-			// TODO: pass a context
-			ctx := context.Background()
 			secretVersion, err := b.secrets.SaveSecret(ctx, b.serviceName, secretName, str)
 			if err != nil {
 				return nil, nil, fmt.Errorf("file %s/%s: saving secret to google secret manager: %w", dir, fileName, err)
@@ -286,12 +282,12 @@ func (b *ServiceBuilder) ContainerFiles() (map[string][]corev1.VolumeMount, []co
 	return volumeMounts, volumes, nil
 }
 
-func (b *ServiceBuilder) Pod() (*corev1.Pod, error) {
+func (b *ServiceBuilder) Pod(ctx context.Context) (*corev1.Pod, error) {
 	volumeMounts, volumes, err := b.Volumes()
 	if err != nil {
 		return nil, err
 	}
-	fileVolumeMounts, fileVolumes, err := b.ContainerFiles()
+	fileVolumeMounts, fileVolumes, err := b.ContainerFiles(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +302,7 @@ func (b *ServiceBuilder) Pod() (*corev1.Pod, error) {
 	}
 	containers := make([]corev1.Container, 0)
 	for containerName, scoreContainer := range b.workload.Containers {
-		envVars, err := b.EnvVar(containerName)
+		envVars, err := b.EnvVar(ctx, containerName)
 		if err != nil {
 			return nil, err
 		}

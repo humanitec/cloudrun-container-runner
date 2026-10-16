@@ -36,7 +36,7 @@ func TestGenerateMultipleWorkloads(t *testing.T) {
 		{workload: "two", service: "two-dev"},
 	} {
 		workload := WithServiceName(workloadFor(tc.workload), tc.service)
-		manifests, err := gen.Generate(&workload, substitutions)
+		manifests, err := gen.Generate(t.Context(), &workload, substitutions)
 		require.NoError(t, err)
 
 		var service servingv1.Service

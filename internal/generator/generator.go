@@ -32,14 +32,14 @@ type CloudRunGenerator struct {
 	secrets SecretSaver
 }
 
-func NewCloudRunGenerator(secrets SecretSaver) *CloudRunGenerator {
+func NewCloudRunGenerator(secrets SecretSaver) score.Generator {
 	return &CloudRunGenerator{
 		secrets: secrets,
 	}
 }
 
 // Generate generates a Cloud Run Service manifest from the score spec and the substitution map.
-func (p *CloudRunGenerator) Generate(spec *types.Workload, substitutions map[string]score.SubValue) (map[string][]byte, error) {
+func (p *CloudRunGenerator) Generate(ctx context.Context, spec *types.Workload, substitutions map[string]score.SubValue) (map[string][]byte, error) {
 	if spec == nil {
 		return map[string][]byte{}, nil
 	}
@@ -48,7 +48,7 @@ func (p *CloudRunGenerator) Generate(spec *types.Workload, substitutions map[str
 
 	builder := NewServiceBuilder(*spec, substitutions, p.secrets, serviceName)
 
-	pod, err := builder.Pod()
+	pod, err := builder.Pod(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("generating cloud run pod: %w", err)
 	}
