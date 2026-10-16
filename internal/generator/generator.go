@@ -18,11 +18,14 @@ import (
 // Kubernetes Score converter, but we need to specify the target platform as Cloud Run for specifics.
 const Platform = "google-cloud-run"
 
+// ServiceManifestKey is the key used for the Cloud Run service manifest in the Generator's output.
+const ServiceManifestKey = "service"
+
 // ServiceNameAnnotation is the workload annotation that names the Cloud Run service.
 // Without it, the service is named after metadata.name.
 const ServiceNameAnnotation = "google-cloud-run.score.dev/service-name"
 
-// SecretSaver stores a secret value of a service under name and returns the full resource name of a secret version,
+// SecretSaver stores a secret value of a service under name and returns the version of the secret
 // so that it can be referenced in the Cloud Run service manifest.
 type SecretSaver interface {
 	SaveSecret(ctx context.Context, service, name, value string) (string, error)
@@ -32,14 +35,14 @@ type CloudRunGenerator struct {
 	secrets SecretSaver
 }
 
-func NewCloudRunGenerator(secrets SecretSaver) *CloudRunGenerator {
+func NewCloudRunGenerator(secrets SecretSaver) score.Generator {
 	return &CloudRunGenerator{
 		secrets: secrets,
 	}
 }
 
 // Generate generates a Cloud Run Service manifest from the score spec and the substitution map.
-func (p *CloudRunGenerator) Generate(spec *types.Workload, substitutions map[string]score.SubValue) (map[string][]byte, error) {
+func (p *CloudRunGenerator) Generate(ctx context.Context, spec *types.Workload, substitutions map[string]score.SubValue) (map[string][]byte, error) {
 	if spec == nil {
 		return map[string][]byte{}, nil
 	}
@@ -48,7 +51,7 @@ func (p *CloudRunGenerator) Generate(spec *types.Workload, substitutions map[str
 
 	builder := NewServiceBuilder(*spec, substitutions, p.secrets, serviceName)
 
-	pod, err := builder.Pod()
+	pod, err := builder.Pod(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("generating cloud run pod: %w", err)
 	}
@@ -105,6 +108,6 @@ func (p *CloudRunGenerator) Generate(spec *types.Workload, substitutions map[str
 	}
 
 	return map[string][]byte{
-		"service": serviceAsBytes,
+		ServiceManifestKey: serviceAsBytes,
 	}, nil
 }

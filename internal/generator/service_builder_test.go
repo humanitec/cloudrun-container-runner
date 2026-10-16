@@ -56,7 +56,7 @@ func TestEnvVar(t *testing.T) {
 	}
 
 	t.Run("no variables", func(t *testing.T) {
-		env, err := builderFor(nil, newFakeSecretSaver()).EnvVar("main")
+		env, err := builderFor(nil, newFakeSecretSaver()).EnvVar(t.Context(), "main")
 		require.NoError(t, err)
 		assert.Empty(t, env)
 	})
@@ -68,7 +68,7 @@ func TestEnvVar(t *testing.T) {
 			"HOST":  "${resources.db.host}",
 			"IMAGE": "${container.image}",
 			"ESC":   "$${resources.db.host}",
-		}, saver).EnvVar("main")
+		}, saver).EnvVar(t.Context(), "main")
 		require.NoError(t, err)
 		assert.Equal(t, []corev1.EnvVar{
 			{Name: "ESC", Value: "${resources.db.host}"},
@@ -84,7 +84,7 @@ func TestEnvVar(t *testing.T) {
 		env, err := builderFor(types.ContainerVariables{
 			"HOST": "${resources.db.host}",
 			"URL":  "pg://${resources.db.password}@${resources.db.host}:${resources.db.port}",
-		}, saver).EnvVar("main")
+		}, saver).EnvVar(t.Context(), "main")
 		require.NoError(t, err)
 
 		wantName := secretmanager.SecretName("hello-world", "main", "env", "URL")
@@ -115,7 +115,7 @@ func TestEnvVar(t *testing.T) {
 			t.Run(testCase.name, func(t *testing.T) {
 				saver := newFakeSecretSaver()
 				saver.err = testCase.saveErr
-				_, err := builderFor(types.ContainerVariables{"V": testCase.value}, saver).EnvVar("main")
+				_, err := builderFor(types.ContainerVariables{"V": testCase.value}, saver).EnvVar(t.Context(), "main")
 				require.ErrorContains(t, err, testCase.wantErrText)
 				if testCase.saveErr != nil {
 					assert.ErrorIs(t, err, testCase.saveErr)
@@ -141,7 +141,7 @@ func TestContainerFiles(t *testing.T) {
 	}
 
 	t.Run("no files", func(t *testing.T) {
-		mounts, volumes, err := builderFor(nil, newFakeSecretSaver()).ContainerFiles()
+		mounts, volumes, err := builderFor(nil, newFakeSecretSaver()).ContainerFiles(t.Context())
 		require.NoError(t, err)
 		assert.Empty(t, mounts)
 		assert.Empty(t, volumes)
@@ -152,7 +152,7 @@ func TestContainerFiles(t *testing.T) {
 		mounts, volumes, err := builderFor(types.ContainerFiles{
 			"/etc/app/config.yaml": {Content: new("password: ${resources.db.password}\nhost: ${resources.db.host}"), Mode: new("0400")},
 			"/etc/other/raw":       {Content: new("${resources.db.password}")},
-		}, saver).ContainerFiles()
+		}, saver).ContainerFiles(t.Context())
 		require.NoError(t, err)
 
 		wantConfig := secretmanager.SecretName("hello-world", "main", "vol", "config.yaml")
@@ -237,7 +237,7 @@ func TestContainerFiles(t *testing.T) {
 			t.Run(testCase.name, func(t *testing.T) {
 				saver := newFakeSecretSaver()
 				saver.err = testCase.saveErr
-				_, _, err := builderFor(testCase.files, saver).ContainerFiles()
+				_, _, err := builderFor(testCase.files, saver).ContainerFiles(t.Context())
 				require.ErrorContains(t, err, testCase.wantErrText)
 				if testCase.saveErr != nil {
 					assert.ErrorIs(t, err, testCase.saveErr)
@@ -601,7 +601,7 @@ func TestPod(t *testing.T) {
 		pod, err := NewServiceBuilder(types.Workload{
 			Metadata:   map[string]any{"name": "hello-world"},
 			Containers: types.WorkloadContainers{"main": {Image: "busybox:latest"}},
-		}, substitutions, newFakeSecretSaver(), "hello-world").Pod()
+		}, substitutions, newFakeSecretSaver(), "hello-world").Pod(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, corev1.PodSpec{
 			Containers: []corev1.Container{{Name: "main", Image: "busybox:latest", Env: []corev1.EnvVar{}}},
@@ -654,7 +654,7 @@ func TestPod(t *testing.T) {
 				},
 			},
 			Resources: resources,
-		}, substitutions, saver, "hello-world").Pod()
+		}, substitutions, saver, "hello-world").Pod(t.Context())
 		require.NoError(t, err)
 
 		dbconnSecret := secretmanager.SecretName("hello-world", "main", "env", "DBCONN")
@@ -740,7 +740,7 @@ func TestPod(t *testing.T) {
 					},
 				}},
 				Resources: resources,
-			}, substitutions, newFakeSecretSaver(), "hello-world").Pod()
+			}, substitutions, newFakeSecretSaver(), "hello-world").Pod(t.Context())
 			require.NoError(t, err)
 			assert.Equal(t, []corev1.VolumeMount{
 				{Name: "resources-vol-01", MountPath: "/data1"},
@@ -764,7 +764,7 @@ func TestPod(t *testing.T) {
 				_, err := NewServiceBuilder(types.Workload{
 					Metadata:   map[string]any{"name": "hello-world"},
 					Containers: types.WorkloadContainers{"main": testCase.container},
-				}, substitutions, newFakeSecretSaver(), "hello-world").Pod()
+				}, substitutions, newFakeSecretSaver(), "hello-world").Pod(t.Context())
 				require.ErrorContains(t, err, testCase.wantErrText)
 			})
 		}

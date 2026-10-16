@@ -186,6 +186,8 @@ func run(ctx context.Context) error {
 // outputPath, and when deploy is set applies it to Cloud Run.
 func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
 	serviceName := getServiceName(in.Id)
+
+	// Extending the spec with a special annotation to define Cloud Run Service name.
 	in.Spec = generator.WithServiceName(in.Spec, serviceName)
 
 	secrets := secretmanager.New(target)
@@ -195,7 +197,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 		}
 	}()
 
-	manifest, err := convert(in, os.Getenv(EnvRuntimeServiceAccount), secrets)
+	manifest, err := convert(ctx, in, os.Getenv(EnvRuntimeServiceAccount), secrets)
 	if err != nil {
 		return err
 	}
@@ -225,18 +227,18 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 }
 
 // convert turns the workload into a Cloud Run service manifest, saving its secrets on the way.
-func convert(in ResourceInputs, serviceAccount string, secrets generator.SecretSaver) (*runv1.Service, error) {
+func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets generator.SecretSaver) (*runv1.Service, error) {
 	if len(in.Spec.Containers) == 0 {
 		return nil, fmt.Errorf("a Cloud Run service needs at least one container")
 	}
 
 	gen := generator.NewCloudRunGenerator(secrets)
-	manifests, err := gen.Generate(&in.Spec, in.Substitutions)
+	manifests, err := gen.Generate(ctx, &in.Spec, in.Substitutions)
 	if err != nil {
 		return nil, fmt.Errorf("generating Cloud Run manifest: %w", err)
 	}
 
-	serviceJSON := manifests["service"]
+	serviceJSON := manifests[generator.ServiceManifestKey]
 	if serviceJSON == nil {
 		return nil, fmt.Errorf("no Cloud Run Service manifest generated")
 	}
