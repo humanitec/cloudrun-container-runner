@@ -85,3 +85,10 @@ func TestGenerateNoServiceName(t *testing.T) {
 	assert.Nil(t, manifests)
 	assert.Empty(t, saver.services, "no secret is saved")
 }
+
+func TestGenerateNilWorkload(t *testing.T) {
+	manifests, err := NewCloudRunGenerator(newFakeSecretSaver()).Generate(t.Context(), nil, nil)
+
+	require.ErrorContains(t, err, "no workload")
+	assert.Nil(t, manifests)
+}

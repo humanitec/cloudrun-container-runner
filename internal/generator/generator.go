@@ -44,7 +44,7 @@ func NewCloudRunGenerator(secrets SecretSaver) score.Generator {
 // Generate generates a Cloud Run Service manifest from the score spec and the substitution map.
 func (p *CloudRunGenerator) Generate(ctx context.Context, spec *types.Workload, substitutions map[string]score.SubValue) (map[string][]byte, error) {
 	if spec == nil {
-		return map[string][]byte{}, nil
+		return nil, fmt.Errorf("no workload to generate a Cloud Run service from")
 	}
 	if len(spec.Containers) == 0 {
 		return nil, fmt.Errorf("a Cloud Run service needs at least one container")
