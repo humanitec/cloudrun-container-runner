@@ -228,10 +228,6 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 
 // convert turns the workload into a Cloud Run service manifest, saving its secrets on the way.
 func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets generator.SecretSaver) (*runv1.Service, error) {
-	if len(in.Spec.Containers) == 0 {
-		return nil, fmt.Errorf("a Cloud Run service needs at least one container")
-	}
-
 	gen := generator.NewCloudRunGenerator(secrets)
 	manifests, err := gen.Generate(ctx, &in.Spec, in.Substitutions)
 	if err != nil {

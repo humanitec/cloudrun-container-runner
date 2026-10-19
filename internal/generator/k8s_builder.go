@@ -24,17 +24,17 @@ import (
 
 const volumeResourceType = "volume"
 
-// ServiceBuilder builds a Kubernetes Service object from a Score workload.
-type ServiceBuilder struct {
+// K8sBuilder builds Kubernetes objects from a Score workload.
+type K8sBuilder struct {
 	workload      types.Workload
 	substitutions map[string]score.SubValue
 	secrets       SecretSaver
 	serviceName   string
 }
 
-// NewServiceBuilder returns a builder for the workload. serviceName names the secrets and file volumes.
-func NewServiceBuilder(workload types.Workload, substitutions map[string]score.SubValue, secrets SecretSaver, serviceName string) *ServiceBuilder {
-	return &ServiceBuilder{
+// NewK8sBuilder returns a builder for the workload. serviceName names the secrets and file volumes.
+func NewK8sBuilder(workload types.Workload, substitutions map[string]score.SubValue, secrets SecretSaver, serviceName string) *K8sBuilder {
+	return &K8sBuilder{
 		workload:      workload,
 		substitutions: substitutions,
 		secrets:       secrets,
@@ -42,7 +42,7 @@ func NewServiceBuilder(workload types.Workload, substitutions map[string]score.S
 	}
 }
 
-func (b *ServiceBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1.EnvVar, error) {
+func (b *K8sBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1.EnvVar, error) {
 	envVars := make([]corev1.EnvVar, 0)
 	for name, value := range b.workload.Containers[containerName].Variables {
 		placeholders := GetAllPlaceholdersInString(value)
@@ -109,7 +109,7 @@ func (b *ServiceBuilder) EnvVar(ctx context.Context, containerName string) ([]co
 	return envVars, nil
 }
 
-func (b *ServiceBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
+func (b *K8sBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
 	volumes := map[string]corev1.Volume{}
 	volumeMounts := map[string][]corev1.VolumeMount{}
 
@@ -184,7 +184,7 @@ func (b *ServiceBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Vo
 	return volumeMounts, volumesAsSlice, nil
 }
 
-func (b *ServiceBuilder) ContainerFiles(ctx context.Context) (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
+func (b *K8sBuilder) ContainerFiles(ctx context.Context) (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
 	volumes := make([]corev1.Volume, 0)
 	volumeMounts := map[string][]corev1.VolumeMount{}
 
@@ -282,7 +282,7 @@ func (b *ServiceBuilder) ContainerFiles(ctx context.Context) (map[string][]corev
 	return volumeMounts, volumes, nil
 }
 
-func (b *ServiceBuilder) Pod(ctx context.Context) (*corev1.Pod, error) {
+func (b *K8sBuilder) Pod(ctx context.Context) (*corev1.Pod, error) {
 	volumeMounts, volumes, err := b.Volumes()
 	if err != nil {
 		return nil, err
@@ -366,14 +366,14 @@ func (b *ServiceBuilder) Pod(ctx context.Context) (*corev1.Pod, error) {
 // Currnetly, secret templating is not supported except where raw secrets are
 // used, so in those cases, unless the secret is on its own in the file, an
 // error will be returned.
-func (b *ServiceBuilder) ExpandFile(file types.ContainerFile, containerName string) (*score.SubValue, error) {
+func (b *K8sBuilder) ExpandFile(file types.ContainerFile, containerName string) (*score.SubValue, error) {
 	if file.Content == nil {
 		return nil, fmt.Errorf("content missing")
 	}
 	if file.NoExpand != nil && *file.NoExpand {
 		return &score.SubValue{Value: *file.Content}, nil
 	}
-	placeholders := GetAllPlaceholders(*file.Content)
+	placeholders := GetAllPlaceholdersInString(*file.Content)
 	placeholderStrs := map[string]string{}
 	isOutputSecret := false
 	for _, placeholder := range placeholders {
@@ -424,7 +424,7 @@ func k8sResourceRequirementsFromScore(resources *types.ContainerResources) (core
 		if resources.Limits != nil {
 			resourceReqs.Limits, err = k8sResourceListFromScore(resources.Limits)
 			if err != nil {
-				return corev1.ResourceRequirements{}, fmt.Errorf("converting resources.requests%w", err)
+				return corev1.ResourceRequirements{}, fmt.Errorf("converting resources.limits%w", err)
 			}
 		}
 	}

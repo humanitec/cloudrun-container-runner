@@ -51,3 +51,37 @@ func TestGenerateMultipleWorkloads(t *testing.T) {
 		assert.Equal(t, tc.service, saver.services[secretName], "the secret is saved for its own service")
 	}
 }
+
+// A service block without containers has no container to put the port on.
+func TestGenerateNoContainers(t *testing.T) {
+	workload := types.Workload{
+		Metadata: types.WorkloadMetadata{"name": "hello-world"},
+		Service:  &types.WorkloadService{},
+	}
+
+	manifests, err := NewCloudRunGenerator(newFakeSecretSaver()).Generate(t.Context(), &workload, nil)
+
+	require.ErrorContains(t, err, "needs at least one container")
+	assert.Nil(t, manifests)
+}
+
+// Without a name, secrets would be saved under "" before Cloud Run rejects the service.
+func TestGenerateNoServiceName(t *testing.T) {
+	workload := types.Workload{
+		Containers: types.WorkloadContainers{"main": {
+			Image:     "busybox:latest",
+			Variables: types.ContainerVariables{"PASSWORD": "${resources.db.password}"},
+		}},
+		Resources: types.WorkloadResources{"db": {Type: "postgres"}},
+	}
+	substitutions := map[string]score.SubValue{
+		"resources.db.password": {Secret: &score.SecretRef{Type: score.DirectSecretType, Value: "s3cr3t"}},
+	}
+	saver := newFakeSecretSaver()
+
+	manifests, err := NewCloudRunGenerator(saver).Generate(t.Context(), &workload, substitutions)
+
+	require.ErrorContains(t, err, "needs a name")
+	assert.Nil(t, manifests)
+	assert.Empty(t, saver.services, "no secret is saved")
+}

@@ -46,10 +46,16 @@ func (p *CloudRunGenerator) Generate(ctx context.Context, spec *types.Workload, 
 	if spec == nil {
 		return map[string][]byte{}, nil
 	}
+	if len(spec.Containers) == 0 {
+		return nil, fmt.Errorf("a Cloud Run service needs at least one container")
+	}
 
 	serviceName := ServiceName(spec)
+	if serviceName == "" {
+		return nil, fmt.Errorf("a Cloud Run service needs a name: set metadata.name or the %s annotation", ServiceNameAnnotation)
+	}
 
-	builder := NewServiceBuilder(*spec, substitutions, p.secrets, serviceName)
+	builder := NewK8sBuilder(*spec, substitutions, p.secrets, serviceName)
 
 	pod, err := builder.Pod(ctx)
 	if err != nil {

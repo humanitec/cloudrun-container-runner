@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/score-spec/score-go/types"
 )
 
 var (
@@ -23,36 +21,6 @@ func allPlaceholdersInString(s string) []string {
 	return placeholderMatch.FindAllString(strings.ReplaceAll(s, "$$", "_"), -1)
 }
 
-// allPlaceholdersIn returns all placeholders in the map or slice.
-// All placeholders are returned, including duplicates.
-func allPlaceholdersIn(o any) []string {
-	placeholders := []string{}
-	if o == nil {
-		return placeholders
-	}
-	switch v := o.(type) {
-	case map[string]any:
-		for _, val := range v {
-			placeholders = append(placeholders, allPlaceholdersIn(val)...)
-		}
-	case []any:
-		for _, val := range v {
-			placeholders = append(placeholders, allPlaceholdersIn(val)...)
-		}
-	case types.ContainerVariables:
-		for _, val := range v {
-			placeholders = append(placeholders, allPlaceholdersIn(val)...)
-		}
-	case map[string]string:
-		for _, val := range v {
-			placeholders = append(placeholders, allPlaceholdersIn(val)...)
-		}
-	case string:
-		placeholders = allPlaceholdersInString(v)
-	}
-	return placeholders
-}
-
 // GetAllPlaceholdersInString returns all the unique placeholders in a string
 //
 // Placeholders of the form: ${...} are returned excluding the surrounding
@@ -62,24 +30,6 @@ func GetAllPlaceholdersInString(s string) []string {
 	placeholders := []string{}
 	placeholderMap := map[string]struct{}{}
 	for _, p := range allPlaceholdersInString(s) {
-		if _, exists := placeholderMap[p]; !exists {
-			placeholderMap[p] = struct{}{}
-			placeholders = append(placeholders, p[2:len(p)-1])
-		}
-	}
-	return placeholders
-}
-
-// GetAllPlaceholders returns all the unique placeholders in an untyped
-// structure made up of either []any or map[string]any.
-//
-// Placeholders of the form: ${...} are returned excluding the surrounding
-// ${}. $$ is escaped as a literal $ so placeholders of the form "$${x.y.z}"
-// will not be returned.
-func GetAllPlaceholders(obj any) []string {
-	placeholders := []string{}
-	placeholderMap := map[string]struct{}{}
-	for _, p := range allPlaceholdersIn(obj) {
 		if _, exists := placeholderMap[p]; !exists {
 			placeholderMap[p] = struct{}{}
 			placeholders = append(placeholders, p[2:len(p)-1])

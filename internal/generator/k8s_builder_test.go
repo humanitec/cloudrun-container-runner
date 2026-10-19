@@ -46,8 +46,8 @@ func TestEnvVar(t *testing.T) {
 		"resources.db.password": {Secret: &score.SecretRef{Type: score.DirectSecretType, Value: "s3cr3t"}},
 		"resources.db.ref":      {Secret: &score.SecretRef{Store: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
 	}
-	builderFor := func(variables types.ContainerVariables, secrets SecretSaver) *ServiceBuilder {
-		return NewServiceBuilder(types.Workload{
+	builderFor := func(variables types.ContainerVariables, secrets SecretSaver) *K8sBuilder {
+		return NewK8sBuilder(types.Workload{
 			Metadata: map[string]any{"name": "hello-world"},
 			Containers: types.WorkloadContainers{
 				"main": {Image: "busybox:latest", Variables: variables},
@@ -131,8 +131,8 @@ func TestContainerFiles(t *testing.T) {
 		"resources.db.password": {Secret: &score.SecretRef{Type: score.DirectSecretType, Value: "s3cr3t"}},
 		"resources.db.ref":      {Secret: &score.SecretRef{Store: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
 	}
-	builderFor := func(files types.ContainerFiles, secrets SecretSaver) *ServiceBuilder {
-		return NewServiceBuilder(types.Workload{
+	builderFor := func(files types.ContainerFiles, secrets SecretSaver) *K8sBuilder {
+		return NewK8sBuilder(types.Workload{
 			Metadata: map[string]any{"name": "hello-world"},
 			Containers: types.WorkloadContainers{
 				"main": {Image: "busybox:latest", Files: files},
@@ -279,8 +279,8 @@ func TestVolumes(t *testing.T) {
 		"not-a-volume-spec":      {Type: "volume"},
 		"secret-volume":          {Type: "volume"},
 	}
-	builderFor := func(containers types.WorkloadContainers) *ServiceBuilder {
-		return NewServiceBuilder(types.Workload{
+	builderFor := func(containers types.WorkloadContainers) *K8sBuilder {
+		return NewK8sBuilder(types.Workload{
 			Metadata:   map[string]any{"name": "hello-world"},
 			Containers: containers,
 			Resources:  resources,
@@ -381,7 +381,7 @@ func TestVolumes(t *testing.T) {
 }
 
 func TestExpandFile(t *testing.T) {
-	builder := NewServiceBuilder(types.Workload{
+	builder := NewK8sBuilder(types.Workload{
 		Containers: map[string]types.Container{
 			"one": {
 				Image: "image-one:latest",
@@ -598,7 +598,7 @@ func TestPod(t *testing.T) {
 	}
 
 	t.Run("just image", func(t *testing.T) {
-		pod, err := NewServiceBuilder(types.Workload{
+		pod, err := NewK8sBuilder(types.Workload{
 			Metadata:   map[string]any{"name": "hello-world"},
 			Containers: types.WorkloadContainers{"main": {Image: "busybox:latest"}},
 		}, substitutions, newFakeSecretSaver(), "hello-world").Pod(t.Context())
@@ -610,7 +610,7 @@ func TestPod(t *testing.T) {
 
 	t.Run("full pod multi container", func(t *testing.T) {
 		saver := newFakeSecretSaver()
-		pod, err := NewServiceBuilder(types.Workload{
+		pod, err := NewK8sBuilder(types.Workload{
 			Metadata: map[string]any{"name": "hello-world"},
 			Containers: types.WorkloadContainers{
 				"main": {
@@ -729,7 +729,7 @@ func TestPod(t *testing.T) {
 	t.Run("mounts of one volume have a stable order", func(t *testing.T) {
 		// Map iteration is random, so a single run could pass by luck.
 		for range 50 {
-			pod, err := NewServiceBuilder(types.Workload{
+			pod, err := NewK8sBuilder(types.Workload{
 				Metadata: map[string]any{"name": "hello-world"},
 				Containers: types.WorkloadContainers{"main": {
 					Image: "busybox:latest",
@@ -756,12 +756,13 @@ func TestPod(t *testing.T) {
 			container   types.Container
 			wantErrText string
 		}{
-			{name: "invalid cpu", container: types.Container{Image: "i", Resources: &types.ContainerResources{Limits: &types.ResourcesLimits{Cpu: new("lots")}}}, wantErrText: "containers.main: converting resources.requests.cpu"},
+			{name: "invalid cpu request", container: types.Container{Image: "i", Resources: &types.ContainerResources{Requests: &types.ResourcesLimits{Cpu: new("lots")}}}, wantErrText: "containers.main: converting resources.requests.cpu"},
+			{name: "invalid cpu limit", container: types.Container{Image: "i", Resources: &types.ContainerResources{Limits: &types.ResourcesLimits{Cpu: new("lots")}}}, wantErrText: "containers.main: converting resources.limits.cpu"},
 			{name: "unsupported probe", container: types.Container{Image: "i", LivenessProbe: &types.ContainerProbe{}}, wantErrText: `containers.main.livenessProbe: only "httpGet" and "exec" probes supported`},
 		}
 		for _, testCase := range testCases {
 			t.Run(testCase.name, func(t *testing.T) {
-				_, err := NewServiceBuilder(types.Workload{
+				_, err := NewK8sBuilder(types.Workload{
 					Metadata:   map[string]any{"name": "hello-world"},
 					Containers: types.WorkloadContainers{"main": testCase.container},
 				}, substitutions, newFakeSecretSaver(), "hello-world").Pod(t.Context())
