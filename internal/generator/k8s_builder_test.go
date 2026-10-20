@@ -44,7 +44,8 @@ func TestEnvVar(t *testing.T) {
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.port":     {Value: 5432},
 		"resources.db.password": {Secret: &score.SecretRef{Type: score.DirectSecretType, Value: "s3cr3t"}},
-		"resources.db.ref":      {Secret: &score.SecretRef{Store: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
+		"resources.db.ref":      {Secret: &score.SecretRef{Type: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
+		"resources.db.nil":      {Secret: &score.SecretRef{Type: score.DirectSecretType}},
 	}
 	builderFor := func(variables types.ContainerVariables, secrets SecretSaver) *K8sBuilder {
 		return NewK8sBuilder(types.Workload{
@@ -106,7 +107,8 @@ func TestEnvVar(t *testing.T) {
 			saveErr     error
 			wantErrText string
 		}{
-			{name: "secret reference", value: "${resources.db.ref}", wantErrText: "secret with name V: secret references are not supported"},
+			{name: "unsupported secret type", value: "${resources.db.ref}", wantErrText: `resolving placeholder ${resources.db.ref} in secret with name V: unsupported secret type "gsm"`},
+			{name: "nil secret", value: "${resources.db.nil}", wantErrText: "resolving placeholder ${resources.db.nil} in secret with name V: direct secret has no value"},
 			{name: "missing substitution", value: "${resources.nope.x}", wantErrText: `resolving placeholder "resources.nope.x": no substitution found`},
 			{name: "incomplete placeholder", value: "${resources.db.host", wantErrText: "resolving variable V in container main: incomplete placeholder"},
 			{name: "saving fails", value: "${resources.db.password}", saveErr: saveErr, wantErrText: "saving secret to google secret manager"},
@@ -129,7 +131,8 @@ func TestContainerFiles(t *testing.T) {
 	substitutions := map[string]score.SubValue{
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.password": {Secret: &score.SecretRef{Type: score.DirectSecretType, Value: "s3cr3t"}},
-		"resources.db.ref":      {Secret: &score.SecretRef{Store: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
+		"resources.db.ref":      {Secret: &score.SecretRef{Type: "gsm", Ref: "projects/1/secrets/db/versions/3"}},
+		"resources.db.nil":      {Secret: &score.SecretRef{Type: score.DirectSecretType}},
 	}
 	builderFor := func(files types.ContainerFiles, secrets SecretSaver) *K8sBuilder {
 		return NewK8sBuilder(types.Workload{
@@ -212,9 +215,14 @@ func TestContainerFiles(t *testing.T) {
 				wantErrText: "more then one file specified in directory /etc/app",
 			},
 			{
-				name:        "secret reference",
+				name:        "unsupported secret type",
 				files:       types.ContainerFiles{"/etc/app/f": {Content: new("${resources.db.ref}")}},
-				wantErrText: "file /etc/app/f: secret references are not supported",
+				wantErrText: `resolving placeholder ${resources.db.ref}: unsupported secret type "gsm"`,
+			},
+			{
+				name:        "nil secret",
+				files:       types.ContainerFiles{"/etc/app/f": {Content: new("${resources.db.nil}")}},
+				wantErrText: "resolving placeholder ${resources.db.nil}: direct secret has no value",
 			},
 			{
 				name:        "relative path",
@@ -412,8 +420,12 @@ func TestExpandFile(t *testing.T) {
 		"resources.db.host":     {Value: "db.example.com"},
 		"resources.db.username": {Value: "test_user"},
 		"resources.db.password": {Secret: &score.SecretRef{
-			Store: "secret",
-			Ref:   "mysecret/mypassword",
+			Type:  score.DirectSecretType,
+			Value: "s3cr3t",
+		}},
+		"resources.db.ref": {Secret: &score.SecretRef{
+			Type: "gsm",
+			Ref:  "projects/1/secrets/db/versions/3",
 		}},
 
 		"resources.shared-store.name": {Value: "shared bucket"},
@@ -483,9 +495,16 @@ func TestExpandFile(t *testing.T) {
 		output, err := builder.ExpandFile(file, "one")
 		require.NoError(t, err)
 		assert.Equal(t, &score.SubValue{Secret: &score.SecretRef{
-			Store: "secret",
-			Ref:   "mysecret/mypassword",
+			Type:  score.DirectSecretType,
+			Value: "s3cr3t",
 		}}, output)
+	})
+	t.Run("unsupported secret type", func(t *testing.T) {
+		file := types.ContainerFile{
+			Content: new("${resources.db.ref}"),
+		}
+		_, err := builder.ExpandFile(file, "one")
+		require.ErrorContains(t, err, `unsupported secret type "gsm"`)
 	})
 	t.Run("multiple placeholder expand secrets", func(t *testing.T) {
 		file := types.ContainerFile{
@@ -521,12 +540,12 @@ func TestExpandFile(t *testing.T) {
 		}}, output)
 	})
 
-	t.Run("multiple placeholder secrets fail as not value", func(t *testing.T) {
+	t.Run("unsupported secret type among other placeholders", func(t *testing.T) {
 		file := types.ContainerFile{
-			Content: new("postgresql://${resources.db.username}:${resources.db.password}@${resources.db.host}:${resources.db.port}/${resources.db.name}"),
+			Content: new("postgresql://${resources.db.username}:${resources.db.ref}@${resources.db.host}"),
 		}
 		_, err := builder.ExpandFile(file, "one")
-		assert.Error(t, err)
+		require.ErrorContains(t, err, `unsupported secret type "gsm"`)
 	})
 }
 

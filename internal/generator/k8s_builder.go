@@ -55,15 +55,10 @@ func (b *K8sBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1
 				return nil, err
 			}
 			if output.Secret != nil {
-				if output.Secret.Value == nil {
-					// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
-					// In the future we may need to support secret references, that reference Google Secret Manager secrets.
-					return nil, fmt.Errorf("secret with name %s: secret references are not supported: require secret value to be provided", name)
-				}
 				isSecret = true
-				str, err := utils.DecodeToString(output.Secret.Value)
+				str, err := secretValue(output.Secret)
 				if err != nil {
-					return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
+					return nil, fmt.Errorf("resolving placeholder ${%s} in secret with name %s: %w", placeholder, name, err)
 				}
 				placeholderStrs[placeholder] = str
 			} else if output.Value != nil {
@@ -229,11 +224,6 @@ func (b *K8sBuilder) ContainerFiles(ctx context.Context) (map[string][]corev1.Vo
 			if content.Secret == nil {
 				return nil, nil, fmt.Errorf("file %s/%s: cloudrun only supports mounting files from google secret manager secrets (gsm)", dir, fileName)
 			}
-			if content.Secret.Value == nil {
-				// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
-				// In the future we may need to support secret references, that reference Google Secret Manager secrets.
-				return nil, nil, fmt.Errorf("file %s/%s: secret references are not supported: require secret value to be provided", dir, fileName)
-			}
 			fileMode, err := fileModeFromString(files[fileName].Mode)
 			if err != nil {
 				return nil, nil, fmt.Errorf("file mode for file %s/%s is invalid: %w", dir, fileName, err)
@@ -361,11 +351,9 @@ func (b *K8sBuilder) Pod(ctx context.Context) (*corev1.Pod, error) {
 }
 
 // ExpandFile returns the SubValue that can be used as the value of
-// the file
+// the file.
 //
-// Currnetly, secret templating is not supported except where raw secrets are
-// used, so in those cases, unless the secret is on its own in the file, an
-// error will be returned.
+// A file with a secret in it is a direct secret. Only direct secrets are supported.
 func (b *K8sBuilder) ExpandFile(file types.ContainerFile, containerName string) (*score.SubValue, error) {
 	if file.Content == nil {
 		return nil, fmt.Errorf("content missing")
@@ -382,19 +370,10 @@ func (b *K8sBuilder) ExpandFile(file types.ContainerFile, containerName string) 
 			return nil, err
 		}
 		if output.Secret != nil {
-			if output.Secret.Value != nil {
-				if placeholderStrs[placeholder], err = utils.DecodeToString(output.Secret.Value); err != nil {
-					return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
-				}
-				isOutputSecret = true
-			} else {
-				// We don't yet support startings that contain more than one secret in files unless the secret value is direct
-				if len(placeholders) == 1 && *file.Content == fmt.Sprintf("${%s}", placeholder) {
-					return output, nil
-				} else {
-					return nil, fmt.Errorf("resolving placeholder ${%s}: secret of store type %s can only exist on its own in a file", placeholder, output.Secret.Store)
-				}
+			if placeholderStrs[placeholder], err = secretValue(output.Secret); err != nil {
+				return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
 			}
+			isOutputSecret = true
 		} else if output.Value != nil {
 			if placeholderStrs[placeholder], err = utils.DecodeToString(output.Value); err != nil {
 				return nil, fmt.Errorf("resolving placeholder ${%s}: %w", placeholder, err)
@@ -409,6 +388,21 @@ func (b *K8sBuilder) ExpandFile(file types.ContainerFile, containerName string) 
 		return &score.SubValue{Secret: &score.SecretRef{Value: expandedFile, Type: score.DirectSecretType}}, nil
 	}
 	return &score.SubValue{Value: expandedFile}, nil
+}
+
+// secretValue returns the value of a secret.
+func secretValue(secret *score.SecretRef) (string, error) {
+	switch secret.Type {
+	case score.DirectSecretType:
+		if secret.Value == nil {
+			return "", fmt.Errorf("direct secret has no value")
+		}
+		return utils.DecodeToString(secret.Value)
+	default:
+		// For now, we don't support secret references. Secrets are resolved in Operator and passed to the driver as a flat value.
+		// In the future we may need to support secret references, that reference Google Secret Manager secrets.
+		return "", fmt.Errorf("unsupported secret type %q", secret.Type)
+	}
 }
 
 func k8sResourceRequirementsFromScore(resources *types.ContainerResources) (corev1.ResourceRequirements, error) {
