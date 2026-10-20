@@ -10,13 +10,17 @@ import (
 	"time"
 
 	"github.com/score-spec/score-go/types"
+	runv1 "google.golang.org/api/run/v1"
+	corev1 "k8s.io/api/core/v1"
+	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/yaml"
 
+	"github.com/humanitec/cloudrun-container-runner/internal/generator"
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
 	"github.com/humanitec/cloudrun-container-runner/internal/score"
-	scorecloudrun "github.com/humanitec/cloudrun-container-runner/internal/score/cloudrun"
+	"github.com/humanitec/cloudrun-container-runner/internal/utils"
 )
 
 var version = "dev"
@@ -70,7 +74,16 @@ type ResourceInputs struct {
 	Id            string                    `json:"id"`
 	Spec          types.Workload            `json:"spec"`
 	Substitutions map[string]score.SubValue `json:"substitutions,omitempty"`
-	Extensions    score.Extensions          `json:"extensions,omitempty"`
+	Extensions    Extensions                `json:"extensions,omitempty"`
+}
+
+type GoogleCloudRunExtensions struct {
+	Pod     map[string]interface{} `json:"pod"`
+	Service map[string]interface{} `json:"service"`
+}
+
+type Extensions struct {
+	GoogleCloudRun *GoogleCloudRunExtensions `json:"google-cloud-run"`
 }
 
 // readResourceInputs loads the resource inputs (JSON) the Container Driver writes for the runner.
@@ -173,22 +186,20 @@ func run(ctx context.Context) error {
 // outputPath, and when deploy is set applies it to Cloud Run.
 func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
 	serviceName := getServiceName(in.Id)
-	secrets := secretmanager.New(target, serviceName)
+
+	// Extending the spec with a special annotation to define Cloud Run Service name.
+	in.Spec = generator.WithServiceName(in.Spec, serviceName)
+
+	secrets := secretmanager.New(target)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
 		}
 	}()
 
-	manifest, err := scorecloudrun.FromScoreWorkload(ctx, scorecloudrun.Options{
-		Name:           serviceName,
-		Workload:       &in.Spec,
-		Substitutions:  in.Substitutions,
-		Extension:      in.Extensions.GoogleCloudRun,
-		ServiceAccount: os.Getenv(EnvRuntimeServiceAccount),
-	}, secrets)
+	manifest, err := convert(ctx, in, os.Getenv(EnvRuntimeServiceAccount), secrets)
 	if err != nil {
-		return fmt.Errorf("converting the Score workload into a Cloud Run service: %w", err)
+		return err
 	}
 
 	if b, err := yaml.Marshal(manifest); err != nil {
@@ -205,7 +216,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 		return err
 	}
 
-	if err := secrets.DeleteUnused(ctx); err != nil {
+	if err := secrets.DeleteUnused(ctx, serviceName); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: cleaning up the secrets the workload no longer references: %v\n", err)
 	}
 
@@ -215,20 +226,73 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 	return nil
 }
 
+// convert turns the workload into a Cloud Run service manifest, saving its secrets on the way.
+func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets generator.SecretSaver) (*runv1.Service, error) {
+	gen := generator.NewCloudRunGenerator(secrets)
+	manifests, err := gen.Generate(ctx, &in.Spec, in.Substitutions)
+	if err != nil {
+		return nil, fmt.Errorf("generating Cloud Run manifest: %w", err)
+	}
+
+	serviceJSON := manifests[generator.ServiceManifestKey]
+	if serviceJSON == nil {
+		return nil, fmt.Errorf("no Cloud Run Service manifest generated")
+	}
+	// Use the Knative and Kubernetes types for patching: they carry `patchStrategy` and `patchMergeKey` struct tags,
+	// the runv1 types don't.
+	var service servingv1.Service
+	if err := json.Unmarshal(serviceJSON, &service); err != nil {
+		return nil, fmt.Errorf("unable to unmarshal knative service manifest: %w", err)
+	}
+
+	// Apply the service account and extensions
+	extensions := in.Extensions.GoogleCloudRun
+	template := &service.Spec.Template
+	pod := corev1.Pod{
+		ObjectMeta: template.ObjectMeta,
+		Spec:       template.Spec.PodSpec,
+	}
+	pod.Spec.ServiceAccountName = serviceAccount
+
+	if extensions != nil {
+		pod, err = utils.ApplyPatch(pod, extensions.Pod)
+		if err != nil {
+			return nil, err
+		}
+	}
+	template.ObjectMeta = pod.ObjectMeta
+	template.Spec.PodSpec = pod.Spec
+
+	// Patch the service after the pod is back in the template, or the pod overwrites the patch.
+	if extensions != nil {
+		service, err = utils.ApplyPatch(service, extensions.Service)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// The Knative types and the Cloud Run Admin API (V1) have the same schema, do a JSON round trip to convert.
+	var manifest *runv1.Service
+	if err := utils.DecodeViaJSON(service, &manifest); err != nil {
+		return nil, fmt.Errorf("unable to marshal knative service manifest: %w", err)
+	}
+	return manifest, nil
+}
+
 // destroy deletes the Cloud Run service the workload deployed to and deletes related secrets.
 func destroy(ctx context.Context, target google.Target, service string) error {
 	if err := cloudrun.New(target).Delete(ctx, service); err != nil {
 		return err
 	}
 
-	secrets := secretmanager.New(target, service)
+	secrets := secretmanager.New(target)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
 		}
 	}()
 
-	if err := secrets.DeleteUnused(ctx); err != nil {
+	if err := secrets.DeleteUnused(ctx, service); err != nil {
 		return fmt.Errorf("deleting the secrets of service %s: %w", service, err)
 	}
 	return nil

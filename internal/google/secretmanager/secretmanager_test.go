@@ -96,9 +96,9 @@ func existing(names ...string) []*secretmanagerpb.Secret {
 
 func clientWith(a api) *Client {
 	return &Client{
-		target:  google.Target{Project: "my-gcp-project", Region: "europe-west1"},
-		service: "hello-world-dev",
-		api:     a,
+		target: google.Target{Project: "my-gcp-project", Region: "europe-west1"},
+		api:    a,
+		saved:  map[string][]string{},
 	}
 }
 
@@ -136,7 +136,7 @@ func TestSaveAddsAVersion(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			version, err := clientWith(tc.fake).SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+			version, err := clientWith(tc.fake).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 			require.NoError(t, err)
 
 			assert.Equal(t, "1", version, "the version number is taken off the resource name")
@@ -153,7 +153,7 @@ func TestSaveReusesTheVersionWhenTheValueIsUnchanged(t *testing.T) {
 		accessResponse: accessed("projects/my-gcp-project/secrets/app_main_env_TOKEN_abc123/versions/4", "s3cr3t"),
 	}
 
-	version, err := clientWith(fake).SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+	version, err := clientWith(fake).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 	require.NoError(t, err)
 
 	assert.Equal(t, "4", version)
@@ -168,7 +168,7 @@ func TestSaveReplicatesToTheCloudRunRegion(t *testing.T) {
 		addedVersionName: "projects/my-gcp-project/secrets/app_main_env_TOKEN_abc123/versions/1",
 	}
 
-	_, err := clientWith(fake).SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+	_, err := clientWith(fake).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 	require.NoError(t, err)
 
 	require.Len(t, fake.created, 1)
@@ -191,7 +191,7 @@ func TestSaveReportsAPIFailures(t *testing.T) {
 	t.Run("the secret cannot be created", func(t *testing.T) {
 		fake := &fakeAPI{createErr: status.Error(codes.PermissionDenied, "denied")}
 
-		_, err := clientWith(fake).SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+		_, err := clientWith(fake).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 		require.ErrorContains(t, err, "creating secret app_main_env_TOKEN_abc123")
 		assert.Empty(t, fake.added, "nothing is written once the secret could not be created")
 	})
@@ -199,7 +199,7 @@ func TestSaveReportsAPIFailures(t *testing.T) {
 	t.Run("the newest version cannot be read", func(t *testing.T) {
 		fake := &fakeAPI{accessErr: status.Error(codes.PermissionDenied, "denied")}
 
-		_, err := clientWith(fake).SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+		_, err := clientWith(fake).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 		require.ErrorContains(t, err, "reading the newest version of secret app_main_env_TOKEN_abc123")
 		assert.Empty(t, fake.added, "a permission failure is not treated as an absent version")
 	})
@@ -233,14 +233,14 @@ func TestSaveReportsAnIncompleteTarget(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := New(tc.target, "hello-world-dev").SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+			_, err := New(tc.target).SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 			require.ErrorContains(t, err, tc.wantErrText)
 		})
 	}
 }
 
 func TestCloseBeforeAnyClientWasBuilt(t *testing.T) {
-	require.NoError(t, New(google.Target{}, "hello-world-dev").Close())
+	require.NoError(t, New(google.Target{}).Close())
 }
 
 // The secrets the workload has stopped referencing are the ones to collect. The
@@ -258,10 +258,10 @@ func TestDeleteUnusedKeepsWhatWasSavedDuringTheRun(t *testing.T) {
 	}
 
 	client := clientWith(fake)
-	_, err := client.SaveSecret(t.Context(), "app_main_env_TOKEN_abc123", "s3cr3t")
+	_, err := client.SaveSecret(t.Context(), "hello-world-dev", "app_main_env_TOKEN_abc123", "s3cr3t")
 	require.NoError(t, err)
 
-	require.NoError(t, client.DeleteUnused(t.Context()))
+	require.NoError(t, client.DeleteUnused(t.Context(), "hello-world-dev"))
 	assert.Equal(t, []string{"app_main_env_DROPPED_def456", "app_main_vol_cert_pem_ghi789"}, fake.deleted)
 }
 
@@ -270,7 +270,7 @@ func TestDeleteUnusedKeepsWhatWasSavedDuringTheRun(t *testing.T) {
 func TestDeleteUnusedRemovesEverythingWhenNothingWasSaved(t *testing.T) {
 	fake := &fakeAPI{listed: existing("app_main_env_TOKEN_abc123", "app_main_env_DROPPED_def456")}
 
-	require.NoError(t, clientWith(fake).DeleteUnused(t.Context()))
+	require.NoError(t, clientWith(fake).DeleteUnused(t.Context(), "hello-world-dev"))
 	assert.Equal(t, []string{"app_main_env_TOKEN_abc123", "app_main_env_DROPPED_def456"}, fake.deleted)
 }
 
@@ -279,7 +279,7 @@ func TestDeleteUnusedRemovesEverythingWhenNothingWasSaved(t *testing.T) {
 func TestDeleteUnusedSelectsTheRunnersSecretsForTheService(t *testing.T) {
 	fake := &fakeAPI{}
 
-	require.NoError(t, clientWith(fake).DeleteUnused(t.Context()))
+	require.NoError(t, clientWith(fake).DeleteUnused(t.Context(), "hello-world-dev"))
 
 	require.Len(t, fake.listings, 1)
 	assert.Equal(t, "projects/my-gcp-project", fake.listings[0].GetParent())
@@ -291,7 +291,7 @@ func TestDeleteUnusedReportsAPIFailures(t *testing.T) {
 	t.Run("the secrets cannot be listed", func(t *testing.T) {
 		fake := &fakeAPI{listErr: status.Error(codes.PermissionDenied, "denied")}
 
-		err := clientWith(fake).DeleteUnused(t.Context())
+		err := clientWith(fake).DeleteUnused(t.Context(), "hello-world-dev")
 		require.ErrorContains(t, err, "listing the secrets of service hello-world-dev")
 		assert.Empty(t, fake.deleted, "nothing is deleted on a listing this incomplete")
 	})
@@ -303,7 +303,7 @@ func TestDeleteUnusedReportsAPIFailures(t *testing.T) {
 			deleteErrs: map[string]error{"app_main_env_KEPT_abc123": status.Error(codes.PermissionDenied, "denied")},
 		}
 
-		err := clientWith(fake).DeleteUnused(t.Context())
+		err := clientWith(fake).DeleteUnused(t.Context(), "hello-world-dev")
 		require.ErrorContains(t, err, "deleting secret app_main_env_KEPT_abc123")
 		assert.Contains(t, fake.deleted, "app_main_env_DROPPED_def456", "the rest are still collected")
 	})
@@ -315,13 +315,34 @@ func TestDeleteUnusedReportsAPIFailures(t *testing.T) {
 			deleteErrs: map[string]error{"app_main_env_DROPPED_def456": status.Error(codes.NotFound, "no such secret")},
 		}
 
-		require.NoError(t, clientWith(fake).DeleteUnused(t.Context()))
+		require.NoError(t, clientWith(fake).DeleteUnused(t.Context(), "hello-world-dev"))
 	})
 }
 
 // The target is only needed once Secret Manager is actually reached, the same
 // way it is for SaveSecret.
 func TestDeleteUnusedReportsAnIncompleteTarget(t *testing.T) {
-	err := New(google.Target{}, "hello-world-dev").DeleteUnused(t.Context())
+	err := New(google.Target{}).DeleteUnused(t.Context(), "hello-world-dev")
 	require.ErrorContains(t, err, google.EnvProject)
+}
+
+// One client serves several services, each one's cleanup sees only its own saves.
+func TestDeleteUnusedKeepsSavesPerService(t *testing.T) {
+	fake := &fakeAPI{
+		createErr:      status.Error(codes.AlreadyExists, "already exists"),
+		accessResponse: accessed("projects/my-gcp-project/secrets/one_main_env_TOKEN_abc123/versions/4", "s3cr3t"),
+		listed:         existing("one_main_env_TOKEN_abc123"),
+	}
+
+	client := clientWith(fake)
+	_, err := client.SaveSecret(t.Context(), "service-one", "one_main_env_TOKEN_abc123", "s3cr3t")
+	require.NoError(t, err)
+	require.Len(t, fake.created, 1)
+	assert.Equal(t, "service-one", fake.created[0].GetSecret().GetLabels()["service"])
+
+	// The fake lists the same secret for any filter: the point is that a save for
+	// service-one does not keep it alive in service-two's cleanup.
+	require.NoError(t, client.DeleteUnused(t.Context(), "service-two"))
+	assert.Equal(t, []string{"one_main_env_TOKEN_abc123"}, fake.deleted)
+	assert.Equal(t, `labels.managed-by="score2cloudrun" AND labels.service="service-two"`, fake.listings[0].GetFilter())
 }

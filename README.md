@@ -84,6 +84,24 @@ your patch on top.
 See [examples/score.humanitec.yaml](examples/score.humanitec.yaml) for an
 example. It sets scaling limits, adds an environment variable, a label.
 
+## Volumes
+
+A Score volume source is `${resources.NAME}`, where `NAME` is a resource of type
+`volume`. Unlike other resources, its substitution is the whole resource, not
+one output. The value holds a Kubernetes volume spec under `google-cloud-run`:
+
+```json
+"resources.data": {
+  "value": {
+    "google-cloud-run": {
+      "csi": {"driver": "gcsfuse.run.googleapis.com", "volumeAttributes": {"bucketName": "my-bucket"}}
+    }
+  }
+}
+```
+
+See [examples/resource-inputs.json](examples/resource-inputs.json) for the full inputs.
+
 ## Limits
 
 - One port per service. Cloud Run only exposes one.

@@ -48,24 +48,24 @@ func (g gsmAPI) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecret
 	return secrets, nil
 }
 
-// Client reads and writes the secrets of one Cloud Run service in Google Secret Manager.
+// Client reads and writes the secrets of Cloud Run services in Google Secret Manager.
+// Each secret is labelled with the service it belongs to.
 //
 // The underlying client is built on first use, so that converting a workload
 // which holds no secrets needs neither Google credentials nor a complete
 // target.
 type Client struct {
-	target  google.Target
-	service string
-	api     api
+	target google.Target
+	api    api
 
-	// saved lists the secrets the current deployment holds for the Cloud Run Service.
-	saved []string
+	// saved lists, per service, the secrets the current deployment holds.
+	saved map[string][]string
 }
 
 // New returns a Client that works in the target's project.
 // Holds a lazy client - the client is created when the first secret is saved.
-func New(target google.Target, service string) *Client {
-	return &Client{target: target, service: service}
+func New(target google.Target) *Client {
+	return &Client{target: target, saved: map[string][]string{}}
 }
 
 // ensureClient builds the Secret Manager client on first use.
@@ -103,22 +103,22 @@ func (c *Client) parent() string {
 	return "projects/" + c.target.Project
 }
 
-// labels marks a secret as this runner's, for this service.
-func (c *Client) labels() map[string]string {
+// labels marks a secret as this runner's, for the service.
+func labels(service string) map[string]string {
 	return map[string]string{
 		managedByLabel: managedByValue,
-		serviceLabel:   c.service,
+		serviceLabel:   service,
 	}
 }
 
 // filter selects the secrets this runner holds for the service, in the syntax
 // of https://cloud.google.com/secret-manager/docs/filtering.
-func (c *Client) filter() string {
-	return fmt.Sprintf("labels.%s=%q AND labels.%s=%q", managedByLabel, managedByValue, serviceLabel, c.service)
+func filter(service string) string {
+	return fmt.Sprintf("labels.%s=%q AND labels.%s=%q", managedByLabel, managedByValue, serviceLabel, service)
 }
 
-// SaveSecret creates the secret if it does not exist yet and returns its version.
-func (c *Client) SaveSecret(ctx context.Context, name, value string) (string, error) {
+// SaveSecret creates the service's secret if it does not exist yet and returns its version.
+func (c *Client) SaveSecret(ctx context.Context, service, name, value string) (string, error) {
 	if err := c.ensureClient(ctx); err != nil {
 		return "", err
 	}
@@ -139,13 +139,13 @@ func (c *Client) SaveSecret(ctx context.Context, name, value string) (string, er
 					},
 				},
 			},
-			Labels: c.labels(),
+			Labels: labels(service),
 		},
 	})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
 		return "", fmt.Errorf("creating secret %s: %w", name, err)
 	}
-	c.saved = append(c.saved, name)
+	c.saved[service] = append(c.saved[service], name)
 
 	// Add a new version only if the value changed. A new version would force a new Cloud Run
 	// revision even when nothing changed.
@@ -170,23 +170,23 @@ func (c *Client) SaveSecret(ctx context.Context, name, value string) (string, er
 // DeleteUnused deletes the service's secrets that SaveSecret did not write during this run.
 // In the destroy case all secrets are deleted.
 // Failures are joined - one secret that won't delete does not stop the rest.
-func (c *Client) DeleteUnused(ctx context.Context) error {
+func (c *Client) DeleteUnused(ctx context.Context, service string) error {
 	if err := c.ensureClient(ctx); err != nil {
 		return err
 	}
 
 	secrets, err := c.api.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{
 		Parent: c.parent(),
-		Filter: c.filter(),
+		Filter: filter(service),
 	})
 	if err != nil {
-		return fmt.Errorf("listing the secrets of service %s: %w", c.service, err)
+		return fmt.Errorf("listing the secrets of service %s: %w", service, err)
 	}
 
 	var errs []error
 	for _, secret := range secrets {
 		name := path.Base(secret.GetName())
-		if slices.Contains(c.saved, name) {
+		if slices.Contains(c.saved[service], name) {
 			continue
 		}
 		err := c.api.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: secret.GetName()})
