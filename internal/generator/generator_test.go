@@ -23,7 +23,7 @@ func TestGenerateMultipleWorkloads(t *testing.T) {
 			Metadata: types.WorkloadMetadata{"name": name},
 			Containers: types.WorkloadContainers{"main": {
 				Image:     "busybox:latest",
-				Variables: types.ContainerVariables{"WORKLOAD": "${metadata.name}", "PASSWORD": "${resources.db.password}"},
+				Variables: types.ContainerVariables{"WORKLOAD": name, "PASSWORD": "${resources.db.password}"},
 			}},
 			Resources: types.WorkloadResources{"db": {Type: "postgres"}},
 		}
@@ -44,7 +44,7 @@ func TestGenerateMultipleWorkloads(t *testing.T) {
 		assert.Equal(t, tc.service, service.Name)
 		env := service.Spec.Template.Spec.Containers[0].Env
 		require.Len(t, env, 2)
-		assert.Equal(t, tc.workload, env[1].Value, "${metadata.name} is the workload's name")
+		assert.Equal(t, tc.workload, env[1].Value, "each workload keeps its own variables")
 
 		secretName := secretmanager.SecretName(tc.service, "main", "env", "PASSWORD")
 		assert.Equal(t, secretName, env[0].ValueFrom.SecretKeyRef.Name)

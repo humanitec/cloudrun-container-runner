@@ -65,16 +65,14 @@ func TestEnvVar(t *testing.T) {
 	t.Run("plain values are inlined and sorted", func(t *testing.T) {
 		saver := newFakeSecretSaver()
 		env, err := builderFor(types.ContainerVariables{
-			"PORT":  "${resources.db.port}",
-			"HOST":  "${resources.db.host}",
-			"IMAGE": "${container.image}",
-			"ESC":   "$${resources.db.host}",
+			"PORT": "${resources.db.port}",
+			"HOST": "${resources.db.host}",
+			"ESC":  "$${resources.db.host}",
 		}, saver).EnvVar(t.Context(), "main")
 		require.NoError(t, err)
 		assert.Equal(t, []corev1.EnvVar{
 			{Name: "ESC", Value: "${resources.db.host}"},
 			{Name: "HOST", Value: "db.example.com"},
-			{Name: "IMAGE", Value: "busybox:latest"},
 			{Name: "PORT", Value: "5432"},
 		}, env)
 		assert.Empty(t, saver.saved, "nothing secret, nothing stored")
@@ -109,6 +107,7 @@ func TestEnvVar(t *testing.T) {
 		}{
 			{name: "unsupported secret type", value: "${resources.db.ref}", wantErrText: `resolving placeholder ${resources.db.ref} in secret with name V: unsupported secret type "gsm"`},
 			{name: "nil secret", value: "${resources.db.nil}", wantErrText: "resolving placeholder ${resources.db.nil} in secret with name V: direct secret has no value"},
+			{name: "not a resource placeholder", value: "${container.image}", wantErrText: `invalid placeholder: must start with "resources", got "container.image"`},
 			{name: "missing substitution", value: "${resources.nope.x}", wantErrText: `resolving placeholder "resources.nope.x": no substitution found`},
 			{name: "incomplete placeholder", value: "${resources.db.host", wantErrText: "resolving variable V in container main: incomplete placeholder"},
 			{name: "saving fails", value: "${resources.db.password}", saveErr: saveErr, wantErrText: "saving secret to google secret manager"},
@@ -472,13 +471,12 @@ func TestExpandFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, &score.SubValue{Value: "db_name"}, output)
 	})
-	t.Run("container placeholder", func(t *testing.T) {
+	t.Run("not a resource placeholder", func(t *testing.T) {
 		file := types.ContainerFile{
 			Content: new("${container.image}"),
 		}
-		output, err := builder.ExpandFile(file, "one")
-		require.NoError(t, err)
-		assert.Equal(t, &score.SubValue{Value: "image-one:latest"}, output)
+		_, err := builder.ExpandFile(file, "one")
+		require.ErrorContains(t, err, `must start with "resources"`)
 	})
 	t.Run("multiple placeholder expand", func(t *testing.T) {
 		file := types.ContainerFile{

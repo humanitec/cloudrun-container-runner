@@ -3,45 +3,11 @@ package score
 import (
 	"testing"
 
-	"github.com/score-spec/score-go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResolvePlaceholder(t *testing.T) {
-	workload := types.Workload{
-		Metadata: map[string]any{
-			"name": "test",
-			"annotations": map[string]any{
-				"one": "VALUE1",
-			},
-		},
-		Containers: map[string]types.Container{
-			"one": {
-				Image: "image-one:latest",
-			},
-			"two": {
-				Image: "image-two:latest",
-			},
-		},
-		Resources: types.WorkloadResources{
-			"db": types.Resource{
-				Type: "postgres",
-			},
-			"readonly-store": types.Resource{
-				Type:  "bucket",
-				Class: new("ro"),
-			},
-			"shared-store": types.Resource{
-				Type:  "bucket",
-				Class: new("rw"),
-				Id:    new("common"),
-			},
-			"missing": types.Resource{
-				Type: "cheese",
-			},
-		},
-	}
 	substitutions := map[string]SubValue{
 		"resources.db.name":     {Value: "db_name"},
 		"resources.db.port":     {Value: 5432},
@@ -57,11 +23,10 @@ func TestResolvePlaceholder(t *testing.T) {
 		"resources.shared-store.name": {Value: "shared bucket"},
 	}
 	testCases := []struct {
-		name          string
-		placeholder   string
-		expected      *SubValue
-		containerName string
-		shouldFail    bool
+		name        string
+		placeholder string
+		expected    *SubValue
+		shouldFail  bool
 	}{
 		{
 			name:        "basic name",
@@ -83,37 +48,21 @@ func TestResolvePlaceholder(t *testing.T) {
 			placeholder: "resources.no-exist.name",
 			shouldFail:  true,
 		},
+		// metadata and container placeholders are replaced when the spec is normalized.
 		{
-			name:        "resource in score but not params",
-			placeholder: "resources.missing.name",
-			shouldFail:  true,
-		},
-		{
-			name:        "metadata.name",
+			name:        "metadata placeholder",
 			placeholder: "metadata.name",
-			expected:    &SubValue{Value: "test"},
-		},
-		{
-			name:        "metadata annotation",
-			placeholder: "metadata.annotations.one",
-			expected:    &SubValue{Value: "VALUE1"},
-		},
-		{
-			name:        "non existent metadata annotation",
-			placeholder: "metadata.annotations.does-not-exist",
 			shouldFail:  true,
 		},
-
 		{
-			name:          "container image",
-			placeholder:   "container.image",
-			containerName: "two",
-			expected:      &SubValue{Value: "image-two:latest"},
+			name:        "container placeholder",
+			placeholder: "container.image",
+			shouldFail:  true,
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			actual, err := ResolvePlaceholder(testCase.placeholder, testCase.containerName, workload, substitutions)
+			actual, err := ResolvePlaceholder(testCase.placeholder, substitutions)
 			if testCase.shouldFail {
 				assert.Error(t, err)
 			} else {
@@ -123,19 +72,18 @@ func TestResolvePlaceholder(t *testing.T) {
 		})
 	}
 }
-func TestResolvePlaceholder_EmptyWorkload(t *testing.T) {
-	workload := types.Workload{}
+func TestResolvePlaceholder_NoSubstitutions(t *testing.T) {
 	t.Run("no metadata", func(t *testing.T) {
-		_, err := ResolvePlaceholder("metadata.name", "container-one", workload, nil)
+		_, err := ResolvePlaceholder("metadata.name", nil)
 		assert.Error(t, err)
 	})
 	t.Run("no resources", func(t *testing.T) {
-		_, err := ResolvePlaceholder("resources.does-not-exist.name", "container-one", workload, nil)
+		_, err := ResolvePlaceholder("resources.does-not-exist.name", nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("no container", func(t *testing.T) {
-		_, err := ResolvePlaceholder("container.image", "container-one", workload, nil)
+		_, err := ResolvePlaceholder("container.image", nil)
 		assert.Error(t, err)
 	})
 

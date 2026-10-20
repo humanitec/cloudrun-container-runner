@@ -50,7 +50,7 @@ func (b *K8sBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1
 		placeholderStrs := map[string]string{}
 		isSecret := false
 		for _, placeholder := range placeholders {
-			output, err := score.ResolvePlaceholder(placeholder, containerName, b.workload, b.substitutions)
+			output, err := score.ResolvePlaceholder(placeholder, b.substitutions)
 			if err != nil {
 				return nil, err
 			}
@@ -104,6 +104,16 @@ func (b *K8sBuilder) EnvVar(ctx context.Context, containerName string) ([]corev1
 	return envVars, nil
 }
 
+// Volumes builds the volumes and their mounts for each container.
+//
+// A volume source must be ${resources.NAME}, with NAME a resource of type volume.
+// Its substitution is the whole resource, not one output: a value with a
+// google-cloud-run key holding a Kubernetes volume spec, for example:
+//
+//	resources.data:
+//	  value:
+//	    google-cloud-run:
+//	      csi: {driver: gcsfuse.run.googleapis.com, volumeAttributes: {bucketName: my-bucket}}
 func (b *K8sBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Volume, error) {
 	volumes := map[string]corev1.Volume{}
 	volumeMounts := map[string][]corev1.VolumeMount{}
@@ -132,7 +142,7 @@ func (b *K8sBuilder) Volumes() (map[string][]corev1.VolumeMount, []corev1.Volume
 			volName := strings.ReplaceAll(placeholders[0], ".", "-")
 
 			if _, exists := volumes[volName]; !exists {
-				output, err := score.ResolvePlaceholder(placeholders[0], containerName, b.workload, b.substitutions)
+				output, err := score.ResolvePlaceholder(placeholders[0], b.substitutions)
 				if err != nil {
 					return nil, nil, fmt.Errorf("resolving volume resource %s: %w", placeholders[0], err)
 				}
@@ -365,7 +375,7 @@ func (b *K8sBuilder) ExpandFile(file types.ContainerFile, containerName string) 
 	placeholderStrs := map[string]string{}
 	isOutputSecret := false
 	for _, placeholder := range placeholders {
-		output, err := score.ResolvePlaceholder(placeholder, containerName, b.workload, b.substitutions)
+		output, err := score.ResolvePlaceholder(placeholder, b.substitutions)
 		if err != nil {
 			return nil, err
 		}
