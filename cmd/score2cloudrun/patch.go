@@ -1,4 +1,4 @@
-package utils
+package main
 
 import (
 	"encoding/json"
@@ -7,8 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
-// ApplyPatch patches the base object with the patch and returns the merged object.
-func ApplyPatch[T any](base T, patch any) (T, error) {
+// applyPatch patches the base object with the patch and returns the merged object.
+func applyPatch[T any](base T, patch any) (T, error) {
 	baseJSON, err := json.Marshal(base)
 	if err != nil {
 		return base, fmt.Errorf("unable to marshal %T: %w", base, err)

@@ -1,4 +1,4 @@
-package utils
+package main
 
 import (
 	"testing"
@@ -23,19 +23,19 @@ func basePod() corev1.Pod {
 func TestApplyPatch(t *testing.T) {
 	t.Run("nil patch keeps the base", func(t *testing.T) {
 		var patch map[string]any
-		got, err := ApplyPatch(basePod(), patch)
+		got, err := applyPatch(basePod(), patch)
 		require.NoError(t, err)
 		assert.Equal(t, basePod().Spec, got.Spec)
 	})
 
 	t.Run("empty patch keeps the base", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{})
+		got, err := applyPatch(basePod(), map[string]any{})
 		require.NoError(t, err)
 		assert.Equal(t, basePod().Spec, got.Spec)
 	})
 
 	t.Run("sets new fields", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{
+		got, err := applyPatch(basePod(), map[string]any{
 			"metadata": map[string]any{"labels": map[string]any{"team": "a"}},
 			"spec":     map[string]any{"serviceAccountName": "sa"},
 		})
@@ -46,7 +46,7 @@ func TestApplyPatch(t *testing.T) {
 	})
 
 	t.Run("merges containers by name", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{
+		got, err := applyPatch(basePod(), map[string]any{
 			"spec": map[string]any{
 				"containers": []any{map[string]any{
 					"name": "main",
@@ -61,7 +61,7 @@ func TestApplyPatch(t *testing.T) {
 	})
 
 	t.Run("overrides a merged env var", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{
+		got, err := applyPatch(basePod(), map[string]any{
 			"spec": map[string]any{
 				"containers": []any{map[string]any{
 					"name": "main",
@@ -74,7 +74,7 @@ func TestApplyPatch(t *testing.T) {
 	})
 
 	t.Run("adds a container", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{
+		got, err := applyPatch(basePod(), map[string]any{
 			"spec": map[string]any{
 				"containers": []any{map[string]any{"name": "sidecar", "image": "envoy"}},
 			},
@@ -84,7 +84,7 @@ func TestApplyPatch(t *testing.T) {
 	})
 
 	t.Run("deletes a container with a directive", func(t *testing.T) {
-		got, err := ApplyPatch(basePod(), map[string]any{
+		got, err := applyPatch(basePod(), map[string]any{
 			"spec": map[string]any{
 				"containers": []any{map[string]any{"name": "main", "$patch": "delete"}},
 			},
@@ -96,27 +96,27 @@ func TestApplyPatch(t *testing.T) {
 	t.Run("removes a field set to null", func(t *testing.T) {
 		pod := basePod()
 		pod.Spec.ServiceAccountName = "sa"
-		got, err := ApplyPatch(pod, map[string]any{"spec": map[string]any{"serviceAccountName": nil}})
+		got, err := applyPatch(pod, map[string]any{"spec": map[string]any{"serviceAccountName": nil}})
 		require.NoError(t, err)
 		assert.Empty(t, got.Spec.ServiceAccountName)
 	})
 
 	t.Run("leaves the base untouched", func(t *testing.T) {
 		pod := basePod()
-		_, err := ApplyPatch(pod, map[string]any{"spec": map[string]any{"serviceAccountName": "sa"}})
+		_, err := applyPatch(pod, map[string]any{"spec": map[string]any{"serviceAccountName": "sa"}})
 		require.NoError(t, err)
 		assert.Equal(t, basePod(), pod)
 	})
 
 	t.Run("patch of the wrong type", func(t *testing.T) {
 		pod := basePod()
-		got, err := ApplyPatch(pod, map[string]any{"spec": "not-an-object"})
+		got, err := applyPatch(pod, map[string]any{"spec": "not-an-object"})
 		require.ErrorContains(t, err, "unable to unmarshal patched v1.Pod")
 		assert.Equal(t, pod, got, "the base comes back on error")
 	})
 
 	t.Run("patch that cannot be marshalled", func(t *testing.T) {
-		_, err := ApplyPatch(basePod(), map[string]any{"spec": func() {}})
+		_, err := applyPatch(basePod(), map[string]any{"spec": func() {}})
 		require.ErrorContains(t, err, "unable to marshal patch for v1.Pod")
 	})
 }

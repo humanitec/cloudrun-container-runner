@@ -8,8 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/humanitec/cloudrun-container-runner/internal/generator"
-	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
+	cloudrun "github.com/humanitec/cloudrun-score-generator"
 )
 
 // fakeSecretSaver stands in for Google Secret Manager, recording what would be
@@ -42,7 +41,7 @@ func inputsFrom(t *testing.T, inputsJSON string) ResourceInputs {
 
 	var in ResourceInputs
 	require.NoError(t, json.Unmarshal([]byte(inputsJSON), &in))
-	in.Spec = generator.WithServiceName(in.Spec, in.Id)
+	in.Spec = cloudrun.WithServiceName(in.Spec, in.Id)
 	return in
 }
 
@@ -99,9 +98,13 @@ func TestConvert(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, service)
 
-	wantNameSingle := secretmanager.SecretName("hello-world-dev", "main", "env", "DB_PASSWORD")
-	wantNameCombined := secretmanager.SecretName("hello-world-dev", "main", "env", "DB_URL")
-	wantNameFile := secretmanager.SecretName("hello-world-dev", "main", "vol", "config.yaml")
+	// Names come from secretID:
+	// https://github.com/humanitec/cloudrun-score-generator/blob/47817d63bce15a39debc4c2e40ba0678658869a1/secret_id.go
+	const (
+		wantNameSingle   = "hello-world-dev_main_env_DB_PASSWORD_131b018df64b5dfc1104fcb226a80a43af7216c7aab7ec6a3e7d1516987ff69f"
+		wantNameCombined = "hello-world-dev_main_env_DB_URL_fcaa2706688d4a48293ce1b9a40c0391f4342a1ab233170d8ccd3552c41f616a"
+		wantNameFile     = "hello-world-dev_main_vol_config_yaml_bee7b71244e592d844ace15c88f1ab414379aa506e64f14555a1d04845a72720"
+	)
 
 	// Check container env
 	require.Len(t, service.Spec.Template.Spec.Containers, 1)
