@@ -15,12 +15,12 @@ import (
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/yaml"
 
-	"github.com/humanitec/cloudrun-container-runner/internal/generator"
+	cloudrun "github.com/humanitec/cloudrun-score-generator"
+	"github.com/humanitec/cloudrun-score-generator/score"
+	"github.com/humanitec/cloudrun-score-generator/secretmanager"
+
 	"github.com/humanitec/cloudrun-container-runner/internal/google"
-	"github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
-	"github.com/humanitec/cloudrun-container-runner/internal/google/secretmanager"
-	"github.com/humanitec/cloudrun-container-runner/internal/score"
-	"github.com/humanitec/cloudrun-container-runner/internal/utils"
+	cloudrunadmin "github.com/humanitec/cloudrun-container-runner/internal/google/cloudrun"
 )
 
 var version = "dev"
@@ -188,9 +188,9 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 	serviceName := getServiceName(in.Id)
 
 	// Extending the spec with a special annotation to define Cloud Run Service name.
-	in.Spec = generator.WithServiceName(in.Spec, serviceName)
+	in.Spec = cloudrun.WithServiceName(in.Spec, serviceName)
 
-	secrets := secretmanager.New(target)
+	secrets := secretmanager.New(target.Project, target.Region)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
@@ -211,7 +211,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 		return nil
 	}
 
-	result, err := cloudrun.New(target).Deploy(ctx, manifest)
+	result, err := cloudrunadmin.New(target).Deploy(ctx, manifest)
 	if err != nil {
 		return err
 	}
@@ -227,14 +227,14 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 }
 
 // convert turns the workload into a Cloud Run service manifest, saving its secrets on the way.
-func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets generator.SecretSaver) (*runv1.Service, error) {
-	gen := generator.NewCloudRunGenerator(secrets)
+func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets cloudrun.SecretSaver) (*runv1.Service, error) {
+	gen := cloudrun.NewGenerator(secrets)
 	manifests, err := gen.Generate(ctx, &in.Spec, in.Substitutions)
 	if err != nil {
 		return nil, fmt.Errorf("generating Cloud Run manifest: %w", err)
 	}
 
-	serviceJSON := manifests[generator.ServiceManifestKey]
+	serviceJSON := manifests[cloudrun.ServiceManifestKey]
 	if serviceJSON == nil {
 		return nil, fmt.Errorf("no Cloud Run Service manifest generated")
 	}
@@ -255,7 +255,7 @@ func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secr
 	pod.Spec.ServiceAccountName = serviceAccount
 
 	if extensions != nil {
-		pod, err = utils.ApplyPatch(pod, extensions.Pod)
+		pod, err = applyPatch(pod, extensions.Pod)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +265,7 @@ func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secr
 
 	// Patch the service after the pod is back in the template, or the pod overwrites the patch.
 	if extensions != nil {
-		service, err = utils.ApplyPatch(service, extensions.Service)
+		service, err = applyPatch(service, extensions.Service)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +273,7 @@ func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secr
 
 	// The Knative types and the Cloud Run Admin API (V1) have the same schema, do a JSON round trip to convert.
 	var manifest *runv1.Service
-	if err := utils.DecodeViaJSON(service, &manifest); err != nil {
+	if err := decodeViaJSON(service, &manifest); err != nil {
 		return nil, fmt.Errorf("unable to marshal knative service manifest: %w", err)
 	}
 	return manifest, nil
@@ -281,11 +281,11 @@ func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secr
 
 // destroy deletes the Cloud Run service the workload deployed to and deletes related secrets.
 func destroy(ctx context.Context, target google.Target, service string) error {
-	if err := cloudrun.New(target).Delete(ctx, service); err != nil {
+	if err := cloudrunadmin.New(target).Delete(ctx, service); err != nil {
 		return err
 	}
 
-	secrets := secretmanager.New(target)
+	secrets := secretmanager.New(target.Project, target.Region)
 	defer func() {
 		if err := secrets.Close(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "score2cloudrun: closing the secret manager client: %v\n", err)
