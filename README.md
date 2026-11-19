@@ -67,6 +67,7 @@ the Resource Definition.
 | `CLOUDRUN_RUNTIME_SERVICE_ACCOUNT` | The Google service account your app runs as. Optional. |
 | `CLOUDRUN_SERVICE_NAME_PREFIX` | Added in front of the service name, for example `myapp-dev`. Optional. |
 | `CLOUDRUN_SERVICE_NAME` | Use this exact service name instead. Optional. |
+| `CLOUDRUN_SERVICE_ANNOTATIONS` | A YAML map of annotations to set on the service, for example `run.googleapis.com/ingress`. Overrides the workload's own annotations. Optional. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service account key. Leave it out if you use Workload Identity. |
 
 ## Changing the Cloud Run service

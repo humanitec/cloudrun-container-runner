@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -54,6 +55,10 @@ const (
 
 	// EnvServiceNamePrefix is the prefix of the Cloud Run service name.
 	EnvServiceNamePrefix = "CLOUDRUN_SERVICE_NAME_PREFIX"
+
+	// EnvServiceAnnotations is a YAML map of annotations the platform sets on the service,
+	// for example its ingress. They override the workload's extensions.
+	EnvServiceAnnotations = "CLOUDRUN_SERVICE_ANNOTATIONS"
 
 	ActionCreate  = "create"
 	ActionDestroy = "destroy"
@@ -183,6 +188,11 @@ func run(ctx context.Context) error {
 // create converts the workload into a service manifest, writes it to
 // outputPath, and when deploy is set applies it to Cloud Run.
 func create(ctx context.Context, in ResourceInputs, target google.Target, outputPath string, deploy bool) error {
+	var serviceAnnotations map[string]string
+	if err := yaml.Unmarshal([]byte(os.Getenv(EnvServiceAnnotations)), &serviceAnnotations); err != nil {
+		return fmt.Errorf("%s: want a YAML map of strings: %w", EnvServiceAnnotations, err)
+	}
+
 	serviceName := getServiceName(in.Id)
 
 	// Extending the spec with a special annotation to define Cloud Run Service name.
@@ -195,7 +205,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 		}
 	}()
 
-	manifest, keepSecrets, err := convert(ctx, in, os.Getenv(EnvRuntimeServiceAccount), secrets)
+	manifest, keepSecrets, err := convert(ctx, in, os.Getenv(EnvRuntimeServiceAccount), serviceAnnotations, secrets)
 	if err != nil {
 		return err
 	}
@@ -225,7 +235,7 @@ func create(ctx context.Context, in ResourceInputs, target google.Target, output
 }
 
 // convert turns the workload into a Cloud Run service manifest, saving its secrets on the way.
-func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secrets cloudrun.SecretSaver) (*runv1.Service, []string, error) {
+func convert(ctx context.Context, in ResourceInputs, serviceAccount string, serviceAnnotations map[string]string, secrets cloudrun.SecretSaver) (*runv1.Service, []string, error) {
 	gen := cloudrun.NewGenerator(secrets)
 	manifests, err := gen.Generate(ctx, &in.Spec, in.Substitutions)
 	if err != nil {
@@ -267,6 +277,13 @@ func convert(ctx context.Context, in ResourceInputs, serviceAccount string, secr
 		if err != nil {
 			return nil, nil, err
 		}
+	}
+
+	if len(serviceAnnotations) > 0 {
+		if service.Annotations == nil {
+			service.Annotations = map[string]string{}
+		}
+		maps.Copy(service.Annotations, serviceAnnotations)
 	}
 
 	// The Knative types and the Cloud Run Admin API (V1) have the same schema, do a JSON round trip to convert.

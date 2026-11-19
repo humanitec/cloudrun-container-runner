@@ -45,6 +45,9 @@ entity:
           CLOUDRUN_RUNTIME_SERVICE_ACCOUNT: cloudrun-deployer@my-gcp-project.iam.gserviceaccount.com
           # The prefix of the deployed service's name.
           CLOUDRUN_SERVICE_NAME_PREFIX: myapp-myenv
+          # Annotations on the service. They override the workload's own.
+          CLOUDRUN_SERVICE_ANNOTATIONS: |
+            run.googleapis.com/ingress: internal-and-cloud-load-balancing
 
     secret_refs:
       # The service account key itself. The Operator reads it from your secret
