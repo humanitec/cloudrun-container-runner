@@ -213,11 +213,9 @@ Secrets the Runner creates are labelled `managed-by=score2cloudrun` and
 `CLOUDSDK_RUN_REGION`, and gain a new version only when their value actually
 changes.
 
-Those two labels are also how the Runner finds them again. Once a deployment is
-live it deletes the secrets it holds for that service which the new revision no
-longer references, and destroying the workload deletes all of them. The cleanup
-waits for Cloud Run to accept the revision first, so a deployment that fails
-leaves the secrets the running revision reads exactly where they are.
+Those two labels are also how the Runner finds them again. Destroying the
+workload deletes all of them. A deployment does 't delete any secrets: older revisions that
+still get traffic read them. So a secret the workload stops using stays until the workload is destroyed.
 
 ```bash
 # Everything the Runner holds, then one service's share of it.

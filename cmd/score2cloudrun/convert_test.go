@@ -94,7 +94,7 @@ func TestConvert(t *testing.T) {
 	    }
       }
 	}`
-	service, keepSecrets, err := convert(t.Context(), inputsFrom(t, inputsJSON), serviceAccount, nil, saver)
+	service, err := convert(t.Context(), inputsFrom(t, inputsJSON), serviceAccount, nil, saver)
 	require.NoError(t, err)
 	require.NotNil(t, service)
 
@@ -163,7 +163,6 @@ func TestConvert(t *testing.T) {
 		wantNameCombined: "postgres://s3cr3t@db.example.com/db",
 		wantNameFile:     "s3cr3t",
 	}, saver.saved)
-	assert.Equal(t, []string{wantNameSingle, wantNameCombined, wantNameFile}, keepSecrets, "every secret the manifest references is kept")
 
 	// Check service account
 	assert.Equal(t, serviceAccount, service.Spec.Template.Spec.ServiceAccountName)
@@ -249,7 +248,7 @@ func TestConvert_Failures(t *testing.T) {
 			saver := newFakeSecretSaver()
 			saver.err = testCase.saveErr
 
-			service, _, err := convert(t.Context(), inputsFrom(t, testCase.inputsJSON), "", nil, saver)
+			service, err := convert(t.Context(), inputsFrom(t, testCase.inputsJSON), "", nil, saver)
 
 			require.ErrorContains(t, err, testCase.wantErrText)
 			// A manifest alongside an error is one a caller might deploy.
@@ -274,7 +273,7 @@ func TestConvert_Extensions(t *testing.T) {
 		in := inputsFrom(t, `{"id": "hello-world-dev", `+spec+`}`)
 		require.Nil(t, in.Extensions.GoogleCloudRun)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
 		assert.Equal(t, "busybox:latest", service.Spec.Template.Spec.Containers[0].Image)
@@ -286,7 +285,7 @@ func TestConvert_Extensions(t *testing.T) {
 		}`)
 		require.Nil(t, in.Extensions.GoogleCloudRun)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Empty(t, service.Spec.Template.Spec.ServiceAccountName)
 	})
@@ -302,7 +301,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  }}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
@@ -325,7 +324,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  }}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Equal(t, map[string]string{"team": "platform"}, service.Spec.Template.Metadata.Labels)
 		assert.Equal(t, map[string]string{"autoscaling.knative.dev/maxScale": "5"}, service.Spec.Template.Metadata.Annotations)
@@ -337,7 +336,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  "extensions": {"google-cloud-run": {"pod": {"spec": {"serviceAccountName": "override@x.iam.gserviceaccount.com"}}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "runtime@x.iam.gserviceaccount.com", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "runtime@x.iam.gserviceaccount.com", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 		assert.Equal(t, "override@x.iam.gserviceaccount.com", service.Spec.Template.Spec.ServiceAccountName)
 	})
@@ -356,7 +355,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  }}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 
 		assert.Equal(t, "hello-world-dev", service.Metadata.Name, "fields the patch does not name are kept")
@@ -375,7 +374,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  }}}}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 
 		require.Len(t, service.Spec.Template.Spec.Containers, 1)
@@ -405,7 +404,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  }}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.NoError(t, err)
 
 		template := service.Spec.Template
@@ -427,7 +426,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  "extensions": {"google-cloud-run": {"pod": {"spec": "not-an-object"}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.ErrorContains(t, err, "v1.Pod")
 		assert.Nil(t, service)
 	})
@@ -437,7 +436,7 @@ func TestConvert_Extensions(t *testing.T) {
 		  "extensions": {"google-cloud-run": {"service": {"spec": "not-an-object"}}}
 		}`)
 
-		service, _, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
+		service, err := convert(t.Context(), in, "", nil, newFakeSecretSaver())
 		require.ErrorContains(t, err, "unable to unmarshal patched v1.Service")
 		assert.Nil(t, service)
 	})
@@ -490,7 +489,7 @@ func TestConvert_ServiceAnnotations(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			in := inputsFrom(t, `{`+workload+testCase.extension+`}`)
 
-			service, _, err := convert(t.Context(), in, "", testCase.serviceAnnotations, newFakeSecretSaver())
+			service, err := convert(t.Context(), in, "", testCase.serviceAnnotations, newFakeSecretSaver())
 			require.NoError(t, err)
 			assert.Equal(t, testCase.wantAnnotations, service.Metadata.Annotations)
 		})
@@ -516,7 +515,7 @@ func envForSubstitution(t *testing.T, substitutionJSON, variable string) string 
 	  "substitutions": {"resources.db.field": ` + substitutionJSON + `}
 	}`
 
-	service, _, err := convert(t.Context(), inputsFrom(t, inputsJSON), "", nil, newFakeSecretSaver())
+	service, err := convert(t.Context(), inputsFrom(t, inputsJSON), "", nil, newFakeSecretSaver())
 	require.NoError(t, err)
 	require.NotNil(t, service)
 	require.Len(t, service.Spec.Template.Spec.Containers, 1)
