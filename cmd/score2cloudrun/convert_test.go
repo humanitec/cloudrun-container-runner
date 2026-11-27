@@ -68,7 +68,7 @@ func TestConvert(t *testing.T) {
 	          "/app/backend/data": {"source": "${resources.data}", "path": "sub/dir", "readOnly": true}
 	        },
 	        "files": {
-	          "/etc/app/config.yaml": {"content": "${resources.db.password}", "mode": "0400"}
+	          "/app/config.yaml": {"content": "${resources.db.password}", "mode": "0400"}
 	        }
 	      }
 	    },
@@ -142,17 +142,17 @@ func TestConvert(t *testing.T) {
 	assert.Equal(t, "config.yaml", volumes[0].Secret.Items[0].Path)
 	assert.Equal(t, int64(0o400), volumes[0].Secret.Items[0].Mode)
 
-	assert.Equal(t, "/etc/app", mounts[0].MountPath)
+	assert.Equal(t, "/app", mounts[0].MountPath)
 	assert.Equal(t, volumes[0].Name, mounts[0].Name)
 
 	// From `volumes`
 	require.NotNil(t, volumes[1].Csi)
-	assert.Equal(t, "resources-data", volumes[1].Name)
+	assert.Equal(t, "data", volumes[1].Name)
 	assert.Equal(t, "gcsfuse.run.googleapis.com", volumes[1].Csi.Driver)
 	assert.True(t, volumes[1].Csi.ReadOnly)
 	assert.Equal(t, map[string]string{"bucketName": "my-bucket-name"}, volumes[1].Csi.VolumeAttributes)
 
-	assert.Equal(t, "resources-data", mounts[1].Name)
+	assert.Equal(t, "data", mounts[1].Name)
 	assert.Equal(t, "/app/backend/data", mounts[1].MountPath)
 	assert.Equal(t, "sub/dir", mounts[1].SubPath)
 	assert.True(t, mounts[1].ReadOnly)
