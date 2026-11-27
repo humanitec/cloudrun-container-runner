@@ -3,10 +3,10 @@ module github.com/humanitec/cloudrun-container-runner
 go 1.27.3
 
 require (
-	github.com/humanitec/cloudrun-score-generator v0.1.0
+	github.com/humanitec/cloudrun-score-generator v0.1.1
 	github.com/score-spec/score-go/v2 v2.0.0-20261110193200-f67f00bdec36
 	github.com/stretchr/testify v1.12.1
-	google.golang.org/api v0.315.0
+	google.golang.org/api v0.316.0
 	k8s.io/api v0.36.5
 	k8s.io/apimachinery v0.37.2
 	knative.dev/serving v0.51.0
